@@ -1,0 +1,8 @@
+version: "1.0"name: flyrank-capstone-widget-platformbase_url: http://localhost:3000run: npm startseed: psql -U postgres -d lead_capture -f schema.sqltest: ./test_stage_1.shendpoints:
+path: /api/v1/admin/registermethod: POST 
+path: /api/v1/admin/loginmethod: POST
+path: /api/v1/admin/widgetsmethod: POST
+path: /api/v1/admin/widgetsmethod: GET
+path: /api/v1/admin/widgets/:idmethod: GET
+path: /api/v1/admin/widgets/:idmethod: PUT
+path: /api/v1/admin/widgets/:idmethod: DELETE
