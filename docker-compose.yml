@@ -1,18 +1,41 @@
-version: '3.8'
-
+# Define the set of multi-container services to be managed by Docker Compose
 services:
+  # Name of the database service definition within the compose network stack
   postgres:
+    # Use the lightweight, security-hardened official PostgreSQL 16 Alpine Linux image
     image: postgres:16-alpine
+    # Explicit name assigned to the running container instance for easier CLI references
     container_name: lead_capture_db
+    # Instruct Docker daemon to automatically restart the container if it crashes or host reboots
     restart: always
+    # Define environment variables passed into the PostgreSQL container at initialization
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: widget_platform
+      # Sets the superuser account name (defaults to 'postgres' if POSTGRES_USER is unset in .env)
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      # Sets the superuser authentication password (defaults to 'postgres' if POSTGRES_PASSWORD is unset)
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      # Name of the default database created on initial startup (defaults to 'widget_platform')
+      POSTGRES_DB: ${POSTGRES_DB:-widget_platform}
+    # Map container network ports to the host network interface
     ports:
+      # Expose container port 5432 to host port 5432 (Host_Port:Container_Port)
       - "5432:5432"
+    # Mount persistent storage volumes inside the container filesystem
     volumes:
+      # Persist PostgreSQL data files from container directory to host named volume 'pgdata'
       - pgdata:/var/lib/postgresql/data
+    # Configure an active service readiness check for container dependency orchestration
+    healthcheck:
+      # Execute pg_isready command inside container to test if database server is accepting connections
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-widget_platform}"]
+      # Interval duration between consecutive health check executions
+      interval: 5s
+      # Maximum time allowed for a single health check command to complete before failing
+      timeout: 5s
+      # Number of consecutive failures required to declare container unhealthy
+      retries: 5
 
+# Declare top-level named volumes managed by the Docker engine across container lifecycles
 volumes:
+  # Persistent storage volume dedicated to holding raw PostgreSQL data blocks safely
   pgdata:

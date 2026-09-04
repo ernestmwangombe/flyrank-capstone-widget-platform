@@ -2,34 +2,40 @@
 // DATABASE SETUP SCRIPT (Executes schema.sql via pg Pool)
 // =============================================================================
 
-require('dotenv').config();
+// File: setup_db.js
+// Description: Node.js runner to execute schema.sql against local or containerized PostgreSQL
+
+// Import the filesystem module to read the schema file
 const fs = require('fs');
+// Import path module to resolve relative file locations safely
 const path = require('path');
-const { Pool } = require('pg');
+// Import the database pool instance configured with environment variables
+const pool = require('./db');
 
-// Create PostgreSQL pool connection
-const pool = new Pool({
-connectionString: process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/lead_capture',
-ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
-});
+// Define asynchronous function to initialize database tables
+async function initializeDatabase() {
+  try {
+    // Resolve absolute path to schema.sql
+    const schemaPath = path.join(__dirname, 'schema.sql');
+    
+    // Read raw SQL script string from disk
+    const sql = fs.readFileSync(schemaPath, 'utf8');
 
-async function applySchema() {
-try {
-console.log('Connecting to database and reading schema.sql...');
-const schemaSql = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
+    console.log('Applying database schema from schema.sql...');
+    
+    // Execute raw SQL batch against PostgreSQL connection pool
+    await pool.query(sql);
 
-    console.log('Executing schema statements...');
-    await pool.query(schemaSql);
-
-    console.log('Successfully initialized database tables and indexes!');
-} catch (err) {
-    console.error('Failed to apply schema:', err.message);
+    console.log('Database successfully initialized with latest schema!');
+  } catch (error) {
+    // Log detailed execution error if table creation or query fails
+    console.error('Failed to initialize database schema:', error);
     process.exit(1);
-} finally {
+  } finally {
+    // Gracefully shut down pool client connection
     await pool.end();
+  }
 }
 
-
-}
-
-applySchema();
+// Execute initialization runner
+initializeDatabase();

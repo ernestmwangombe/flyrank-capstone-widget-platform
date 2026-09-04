@@ -1,47 +1,31 @@
-# FlyRank Widget Platform — Capstone Project
+# Stage 2: Embed Snippet Generation — FlyRank Capstone
 
 ## Overview
-A multi-tenant backend API for managing lead capture widgets, tenant configurations, and lead submissions built with Node.js, Express, and PostgreSQL.
+Stage 2 extends the **FlyRank Widget Platform** backend to dynamically generate client-side integration snippets upon widget creation and retrieval. The generated snippet allows external tenant websites to embed hosted widgets seamlessly using asynchronous JavaScript injection.
 
-## Architecture
-- **API Framework**: Express.js (REST API)
-- **Database**: PostgreSQL
-- **Authentication**: JWT (JSON Web Tokens)
-- **Environment Management**: dotenv (`.env` for secrets, `.env.example` for contract)
+---
 
-## Architecture Overview
+## Architectural Objectives
+- **Dynamic Snippet Formulation:** Construct standard `<script>` tag snippets bound to specific widget identifiers and environment configuration.
+- **Tenant Context Preservation:** Ensure every generated snippet correlates accurately with its owner `tenant_id`.
+- **Non-Blocking Delivery Strategy:** Utilise the `defer` script loading attribute to prevent parser-blocking on client sites.
 
-```mermaid
-graph TD
-    Client[Client Application / Postman] -->|HTTP Requests| Server[Node.js / Express Server]
-   
-    subgraph Application Boundary
-        Server --> Middleware[Auth & Validation Middleware]
-        Middleware --> Controllers[Request Handlers / Logic]
-        Controllers --> Models[Data Access Layer]
-    end
-    
-    subgraph Data Store
-        Models --> DB[(PostgreSQL Engine)]
-    end
-    
-    subgraph Configuration
-        Secrets[.env / Environment Variables] -.-> Server
-    end
-```    
+---
 
-## Getting Started
+## API Specifications
 
-### Prerequisites
-- Node.js (v18+)
-- PostgreSQL (v14+)
-- Docker & Docker Compose (optional for containerized setup)
+### 1. Create Widget
+- **Endpoint:** `POST /api/widgets`
+- **Headers:** `Content-Type: application/json`
 
-### Installation & Setup
-
-### Installation & Setup
-
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/ernestmwangombe/flyrank-capstone-widget-platform.git
-   cd flyrank-capstone-widget-platform
+#### Request Body
+```json
+{
+  "tenant_id": "tenant_alpha_token_123",
+  "name": "Stage 2 Lead Form",
+  "type": "signup_form",
+  "config": {
+    "title": "Subscribe to Newsletter",
+    "buttonText": "Submit"
+  }
+}
