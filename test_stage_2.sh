@@ -6,8 +6,27 @@
 # Target host server configuration
 SERVER_URL="http://localhost:3000"
 
-# Tenant authentication token for test isolated state
-TOKEN="tenant_alpha_token_123"
+# FIX: the server now only accepts real JWTs, so this test registers a fresh tenant and logs in to get one
+STAMP=$(date +%s)
+
+# Unique email so repeated test runs never collide
+EMAIL="stage2_${STAMP}@example.com"
+
+# Register the test tenant (output discarded; the login below proves it worked)
+curl -s -o /dev/null -X POST "$SERVER_URL/api/auth/register" \
+  -H "Content-Type: application/json" \
+  -d "{\"email\":\"$EMAIL\",\"password\":\"password123\",\"company_name\":\"Stage 2 Corp\"}"
+
+# Log in and extract the signed JWT from the JSON response
+TOKEN=$(curl -s -X POST "$SERVER_URL/api/auth/login" \
+  -H "Content-Type: application/json" \
+  -d "{\"email\":\"$EMAIL\",\"password\":\"password123\"}" | jq -r '.token')
+
+# Stop early with a clear message if no token came back
+if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
+  echo "FAIL: could not obtain a JWT from /api/auth/login."
+  exit 1
+fi
 
 echo "=========================================================="
 echo "RUNNING STAGE 2 VERIFICATION: Embed Snippet Generation"
@@ -42,7 +61,8 @@ WIDGET_ID=$(echo "$CREATE_RESPONSE" | grep -o '"id":[^,}]*' | awk -F':' '{print 
 echo "Extracted Widget ID: $WIDGET_ID"
 
 # Assert script tag query string contains correct ID
-if echo "$CREATE_RESPONSE" | grep -q "widget.js?id=$WIDGET_ID"; then
+# FIX (Stage 3): the snippet now uses a versioned bundle URL such as widget.v1.js, so match widget.v<number>.js?id=<id>
+if echo "$CREATE_RESPONSE" | grep -Eq "widget\.v[0-9]+\.js\?id=$WIDGET_ID"; then
     echo "PASS: Snippet script tag correctly binds Widget ID ($WIDGET_ID)."
 else
     echo "FAIL: Snippet script tag does not contain expected script URL format."
