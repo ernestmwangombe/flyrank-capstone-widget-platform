@@ -1,8 +1,79 @@
-version: "1.0"name: flyrank-capstone-widget-platformbase_url: http://localhost:3000run: npm startseed: psql -U postgres -d lead_capture -f schema.sqltest: ./test_stage_1.shendpoints:
-path: /api/v1/admin/registermethod: POST 
-path: /api/v1/admin/loginmethod: POST
-path: /api/v1/admin/widgetsmethod: POST
-path: /api/v1/admin/widgetsmethod: GET
-path: /api/v1/admin/widgets/:idmethod: GET
-path: /api/v1/admin/widgets/:idmethod: PUT
-path: /api/v1/admin/widgets/:idmethod: DELETE
+# ==============================================================================
+# capstone.yaml - manifest read by the evaluator (Stages 1-4)
+# ==============================================================================
+
+# Manifest format version
+version: "1.0"
+# Project name (matches the GitHub repository name)
+name: flyrank-capstone-widget-platform
+# Where the running API answers; the endpoint paths below are relative to this URL
+base_url: http://localhost:3000
+
+# ONE command that builds and boots the whole system (API + PostgreSQL); the first start also creates the tables and demo rows from schema.sql
+run: "docker compose up --build"
+
+# Seed step: pipes schema.sql into psql inside the running PostgreSQL container (drops and recreates the tables, then inserts demo tenant 1 and widget 1); uses stdin so no /path argument is mangled by Git Bash on Windows
+seed: "docker compose exec -T postgres psql -U postgres -d flyrank_db < schema.sql"
+
+# Optional test command: runs the four stage scripts in order and stops at the first failure (needs bash, curl and jq, with the system already running)
+test: "bash test_stage_1.sh && bash test_stage_2.sh && bash test_stage_3.sh && bash test_stage_4.sh"
+
+# Endpoints the evaluator can probe (auth: none = public, bearer = needs the JWT returned by login; expect = the success status)
+endpoints:
+  # ---- Health ----
+  - path: /health                        # Liveness check
+    method: GET                          # HTTP method
+    auth: none                           # No token needed
+    expect: 200                          # Success status
+
+  # ---- Authentication (Stage 1) ----
+  - path: /api/v1/admin/register         # Create a tenant account (also available at /api/auth/register)
+    method: POST                         # HTTP method
+    auth: none                           # No token needed
+    expect: 201                          # Success status
+  - path: /api/v1/admin/login            # Exchange email + password for a JWT (also available at /api/auth/login)
+    method: POST                         # HTTP method
+    auth: none                           # No token needed
+    expect: 200                          # Success status
+
+  # ---- Widget management, tenant-isolated (Stages 1 and 2; responses include the embed snippet) ----
+  - path: /api/v1/admin/widgets          # Create a widget (also available at /api/widgets)
+    method: POST                         # HTTP method
+    auth: bearer                         # Needs Authorization: Bearer <token>
+    expect: 201                          # Success status
+  - path: /api/v1/admin/widgets          # List the calling tenant's widgets
+    method: GET                          # HTTP method
+    auth: bearer                         # Needs Authorization: Bearer <token>
+    expect: 200                          # Success status
+  - path: /api/v1/admin/widgets/:id      # Fetch one widget (404 if it belongs to another tenant)
+    method: GET                          # HTTP method
+    auth: bearer                         # Needs Authorization: Bearer <token>
+    expect: 200                          # Success status
+  - path: /api/v1/admin/widgets/:id      # Update name, type and/or config
+    method: PUT                          # HTTP method
+    auth: bearer                         # Needs Authorization: Bearer <token>
+    expect: 200                          # Success status
+  - path: /api/v1/admin/widgets/:id      # Delete a widget and its submissions
+    method: DELETE                       # HTTP method
+    auth: bearer                         # Needs Authorization: Bearer <token>
+    expect: 200                          # Success status
+
+  # ---- Public widget delivery (Stage 3; CORS enabled, cached) ----
+  - path: /widget.v1.js?id=1             # Versioned loader script, cached for one year
+    method: GET                          # HTTP method
+    auth: none                           # No token needed
+    expect: 200                          # Success status
+  - path: /api/widgets/1/config          # Widget configuration JSON, cached for 60 seconds (uses the seeded widget 1)
+    method: GET                          # HTTP method
+    auth: none                           # No token needed
+    expect: 200                          # Success status
+
+  # ---- Public submission (Stage 4; CORS enabled) ----
+  - path: /api/embed/submit              # CORS preflight for the submission endpoint
+    method: OPTIONS                      # HTTP method
+    auth: none                           # No token needed
+    expect: 204                          # Success status
+  - path: /api/embed/submit              # Submit form data to a widget (400 if invalid, 404 if the widget is unknown, 413 if too large)
+    method: POST                         # HTTP method
+    auth: none                           # No token needed
+    expect: 201                          # Success status
