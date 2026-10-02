@@ -3,10 +3,12 @@
 // ==============================================================================
 
 // Import dotenv to load environment variables from .env file into process.env
-require('dotenv').config();
+import dotenv from 'dotenv';
+dotenv.config();
 
 // Import the Pool class from the 'pg' (node-postgres) driver package
-const { Pool } = require('pg');
+import pg from 'pg';
+const { Pool } = pg;
 
 // Construct configuration object dynamically from environment variables
 const poolConfig = process.env.DATABASE_URL
@@ -18,7 +20,7 @@ const poolConfig = process.env.DATABASE_URL
     }
   : {
       // Fallback to individual connection parameters from .env file
-      host: process.env.DB_HOST || 'localhost',         // Host address
+      host: process.env.DB_HOST || 'postgres',          // Host address (Docker container service name)
       port: parseInt(process.env.DB_PORT || '5432', 10), // Port number integer
       user: process.env.DB_USER || 'postgres',          // Database username
       password: process.env.DB_PASSWORD || 'postgres',  // Database password
@@ -27,7 +29,7 @@ const poolConfig = process.env.DATABASE_URL
     };
 
 // Initialize a new PostgreSQL connection pool instance
-const pool = new Pool(poolConfig);
+export const pool = new Pool(poolConfig);
 
 // Log event when the pool establishes a new client connection
 pool.on('connect', () => {
@@ -42,4 +44,4 @@ pool.on('error', (err) => {
 });
 
 // Export the pool instance so server.js can execute queries via pool.query()
-module.exports = pool;
+export default pool;
