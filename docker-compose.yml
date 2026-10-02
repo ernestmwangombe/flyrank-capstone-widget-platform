@@ -19,7 +19,8 @@ services:
       - DB_USER=postgres
       - DB_PASSWORD=postgres
       - DB_NAME=flyrank_db
-      - JWT_SECRET=dev_only_change_me
+      # FIX: read JWT_SECRET from your shell or .env (Compose substitutes ${...} from .env); falls back to a DEV-ONLY value so a clean clone still boots
+      - JWT_SECRET=${JWT_SECRET:-dev_only_change_me}
     # -------------------------------------------------------------------------
     # Development Hot-Reloading via Bind Mounts
     # Maps local directory to /app inside container while preserving node_modules
