@@ -165,6 +165,43 @@ fi
 
 
 # ==============================================================================
+# TEST SUITE 6: Loader safety (widget text must be shown as plain text, never as HTML)
+# ==============================================================================
+# Print the suite heading
+echo ""
+echo "[Test Suite 6] Verifying the loader shows widget text safely..."
+
+# Download the full versioned loader script text
+LOADER_BODY=$(curl -s "$BASE_URL/widget.v1.js")
+
+# The loader must NOT assign HTML strings to innerHTML (that would run markup from a widget title)
+if echo "$LOADER_BODY" | grep -q "innerHTML"; then
+  # Record a failure because innerHTML is still used
+  echo "  ❌ FAIL: loader still uses innerHTML (widget text could run as HTML)"
+  # Increase the fail counter
+  FAILED_TESTS=$((FAILED_TESTS + 1))
+else
+  # Record a pass because innerHTML is not used
+  echo "  ✅ PASS: loader does not use innerHTML"
+  # Increase the pass counter
+  PASSED_TESTS=$((PASSED_TESTS + 1))
+fi
+
+# The loader must set the title and button text through textContent (plain text)
+if echo "$LOADER_BODY" | grep -q "textContent"; then
+  # Record a pass because textContent is used
+  echo "  ✅ PASS: loader sets widget text with textContent"
+  # Increase the pass counter
+  PASSED_TESTS=$((PASSED_TESTS + 1))
+else
+  # Record a failure because textContent was not found
+  echo "  ❌ FAIL: loader does not use textContent"
+  # Increase the fail counter
+  FAILED_TESTS=$((FAILED_TESTS + 1))
+fi
+
+
+# ==============================================================================
 # TEST SUITE SUMMARY & EXIT STATUS
 # ==============================================================================
 echo ""

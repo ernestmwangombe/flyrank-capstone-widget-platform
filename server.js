@@ -586,7 +586,19 @@ const getBaseUrl = (req) => process.env.BASE_URL || `${req.protocol}://${req.get
 
 // FIX: helper that builds the widget loader JavaScript text for a given base URL (shared by both routes below)
 const buildWidgetScript = (baseUrl) => {
-  // The loader code itself is unchanged from before, only moved into this function
+  // FIX (security): the card used to be built by joining the widget's title and button text into an HTML string and assigning it to innerHTML,
+  // so a title such as <img src=x onerror=...> would have been run as markup on the customer's website.
+  // The replacement lines inside the script below work like this (these notes live here, not inside the script, so the public file stays small):
+  //   1. const card = document.createElement('div')        -> creates an empty card box in memory (no HTML parsing involved)
+  //   2. card.style.cssText = '...'                         -> applies the same card styling as before
+  //   3. const heading = document.createElement('h4')      -> creates the title element
+  //   4. heading.style.cssText = '...'                      -> applies the same title styling as before
+  //   5. heading.textContent = titleText                    -> puts the title in as PLAIN TEXT, so any <tags> in it are shown literally and never run
+  //   6. const button = document.createElement('button')   -> creates the button element
+  //   7. button.style.cssText = '...'                       -> applies the same button styling as before
+  //   8. button.textContent = buttonText                    -> puts the button label in as PLAIN TEXT for the same reason
+  //   9. card.appendChild(heading) / card.appendChild(button) -> places the title and button inside the card
+  //  10. widgetContainer.appendChild(card)                  -> places the finished card inside the fixed-position container
   const widgetScript = `
     (function () {
       const currentScript = document.currentScript;
@@ -624,11 +636,20 @@ const buildWidgetScript = (baseUrl) => {
           const titleText = data.config.title || data.name || 'Widget';
           const buttonText = data.config.buttonText || 'Submit';
 
-          widgetContainer.innerHTML = 
-            '<div style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 8px; padding: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); width: 280px;">' +
-              '<h4 style="margin: 0 0 12px 0; color: #0f172a; font-size: 15px;">' + titleText + '</h4>' +
-              '<button style="background: #2563eb; color: #ffffff; border: none; padding: 8px 12px; border-radius: 4px; cursor: pointer; width: 100%; font-weight: bold;">' + buttonText + '</button>' +
-            '</div>';
+          const card = document.createElement('div');
+          card.style.cssText = 'background: #ffffff; border: 1px solid #cbd5e1; border-radius: 8px; padding: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); width: 280px;';
+
+          const heading = document.createElement('h4');
+          heading.style.cssText = 'margin: 0 0 12px 0; color: #0f172a; font-size: 15px;';
+          heading.textContent = titleText;
+
+          const button = document.createElement('button');
+          button.style.cssText = 'background: #2563eb; color: #ffffff; border: none; padding: 8px 12px; border-radius: 4px; cursor: pointer; width: 100%; font-weight: bold;';
+          button.textContent = buttonText;
+
+          card.appendChild(heading);
+          card.appendChild(button);
+          widgetContainer.appendChild(card);
 
           document.body.appendChild(widgetContainer);
         })
@@ -724,10 +745,8 @@ app.get('/api/widgets/:id/config', async (req, res) => {
     console.error(`[DB Error] GET /api/widgets/${id}/config failed:`, err);
     
     res.setHeader('Cache-Control', 'no-store');
-    return res.status(500).json({ 
-      error: 'Database query failed', 
-      details: err.message || 'An unexpected database error occurred.' 
-    });
+    // FIX: the response no longer includes err.message (the full error is already logged above), so database details never reach the public
+    return res.status(500).json({ error: 'Database query failed' });
   }
 });
 
