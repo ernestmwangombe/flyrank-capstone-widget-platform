@@ -160,7 +160,7 @@ curl -X POST http://localhost:3000/api/embed/submit \
 
 ## API reference
 
-All errors are JSON in the form `{ "error": "message" }` unless noted in [Limitations](#limitations).
+All errors are JSON in the form `{ "error": "message" }`. Submission validation errors add a `details` list. Unknown routes return `404`, malformed JSON bodies return `400` and oversized bodies return `413`, all as JSON rather than an HTML page.
 
 ### Authentication
 
@@ -221,9 +221,9 @@ The embed snippet returned by the management API looks like:
 | Status | Meaning |
 |--------|---------|
 | `201` | Stored. Body: `{ message, submission_id, widget_id, created_at }` |
-| `400` | Validation failed. Body: `{ error: "Validation Failed", details: [{ field, message }] }` |
+| `400` | Validation failed (body: `{ error: "Validation Failed", details: [{ field, message }] }`) or malformed JSON (body: `{ error: "..." }`) |
 | `404` | The widget does not exist |
-| `413` | Body larger than the 10 KB limit |
+| `413` | Body larger than the 10 KB limit (JSON error) |
 | `500` | Unexpected server error (generic message; details are logged server-side only) |
 
 ### Health
@@ -240,7 +240,7 @@ Each stage has an integration script. Start the app first (`docker compose up`),
 bash test_stage_1.sh   # register/login, auth rejection, CRUD, tenant isolation
 bash test_stage_2.sh   # embed snippet generation
 bash test_stage_3.sh   # versioned bundle, cache headers, config endpoint
-bash test_stage_4.sh   # CORS preflight, submission, validation, 404, oversized payload
+bash test_stage_4.sh   # CORS preflight, submission, validation, 404, oversized payload, malformed JSON, JSON 404
 ```
 
 | Script | Covers |
@@ -248,7 +248,7 @@ bash test_stage_4.sh   # CORS preflight, submission, validation, 404, oversized 
 | `test_stage_1.sh` | Register, duplicate/short-password rejection, login, wrong password; no header, made-up Bearer string, `x-tenant-id` header and tampered token all return `401`; create/list/update/delete widget; tenant B gets `404` when reading, updating or deleting tenant A's widget and the widget is left unchanged |
 | `test_stage_2.sh` | `embed_snippet` present on create and fetch, bound to the right widget id and versioned URL |
 | `test_stage_3.sh` | `/widget.v1.js` status, content type and immutable cache; config endpoint headers; `400`/`404` handling; unknown version `404`; legacy URL short cache; snippet uses the versioned URL |
-| `test_stage_4.sh` | Preflight `204`, valid submission `201`, missing data `400`, unknown widget `404`, oversized body `413` |
+| `test_stage_4.sh` | Preflight `204`, valid submission `201`, missing data `400`, unknown widget `404`, oversized body `413` as JSON, malformed JSON `400` as JSON, unknown route `404` as JSON |
 
 Raw outputs are pasted in [`EVIDENCE.md`](EVIDENCE.md). Design decisions, where AI helped and where it was wrong are in [`BUILDLOG.md`](BUILDLOG.md).
 
@@ -261,7 +261,7 @@ Raw outputs are pasted in [`EVIDENCE.md`](EVIDENCE.md). Design decisions, where 
 | **1. Widget management API** | Tenant registration and login, signed JWT authentication, full widget CRUD, tenant isolation on every query | `test_stage_1.sh` |
 | **2. Embed snippet generation** | Every widget response includes a ready-to-paste `<script>` embed snippet | `test_stage_2.sh` |
 | **3. Fast, cached widget delivery** | Versioned widget bundle (`/widget.v1.js`, cached for a year), public config endpoint (cached for 60 s), CORS, `no-store` on error responses | `test_stage_3.sh` |
-| **4. Public submission endpoint** | Cross-origin submissions with CORS and preflight, Zod input validation, widget existence check, storage in PostgreSQL, oversized-payload rejection | `test_stage_4.sh` |
+| **4. Public submission endpoint** | Cross-origin submissions with CORS and preflight, Zod input validation, widget existence check, storage in PostgreSQL, oversized-payload rejection, JSON error responses (global error handler) | `test_stage_4.sh` |
 
 ---
 
@@ -270,8 +270,7 @@ Raw outputs are pasted in [`EVIDENCE.md`](EVIDENCE.md). Design decisions, where 
 Honest notes on the current state of the project:
 
 - **The widget UI is minimal.** The loader script shows a card with the widget's title and button. It does not collect or send form data itself; submissions are sent to `POST /api/embed/submit`.
-- **Oversized or malformed JSON bodies** are rejected with the right status code (`413` or `400`) but the response is Express's default HTML error page, not JSON.
-- **Body limit is 10 KB.** It is set in `server.js` (`express.json({ limit: '10kb' })`); the `test_stage_4.sh` oversized-body check sends a larger body and expects `413`.
+- **Body limit is 10 KB.** It is set in `server.js` (`express.json({ limit: '10kb' })`); the `test_stage_4.sh` oversized-body check sends a larger body and expects a JSON `413`.
 - **`schema.sql` is a single development script.** It drops and recreates the tables, and Docker runs it only when the database volume is new.
 - **Login tokens expire** (default 1 hour). There is no refresh token, logout or password reset.
 - **The seeded demo tenant cannot log in** (placeholder password hash); register a tenant to get a working account.

@@ -732,6 +732,58 @@ app.get('/api/widgets/:id/config', async (req, res) => {
 });
 
 // ==============================================================================
+// ERROR HANDLING
+// FIX: every failure now returns a JSON body in the same { "error": "message" } shape as the rest of the API,
+// instead of Express's default HTML error page. These two handlers MUST stay below every route above.
+// ==============================================================================
+
+// Catch-all handler: any request that matched no route above ends up here (a middleware with no path matches everything)
+app.use((req, res) => {
+  // Reply 404 Not Found with a JSON body (the message is fixed text, so nothing from the request is echoed back)
+  return res.status(404).json({ error: 'Route not found' });
+});
+
+// Global error handler: Express calls a 4-argument middleware whenever body parsing or any route throws or calls next(err)
+app.use((err, req, res, next) => {
+  // If the response has already started streaming, we cannot send JSON anymore, so hand the error to Express's built-in handler
+  if (res.headersSent) {
+    // Delegate to the default handler, which closes the connection safely
+    return next(err);
+  }
+
+  // body-parser sets err.type to 'entity.too.large' when the body is bigger than the express.json limit (10kb)
+  if (err.type === 'entity.too.large') {
+    // Reply 413 Payload Too Large with a clean JSON message
+    return res.status(413).json({ error: 'Payload too large: request body exceeds the 10 KB limit' });
+  }
+
+  // body-parser sets err.type to 'entity.parse.failed' when the body is not valid JSON (for example a missing quote or brace)
+  if (err.type === 'entity.parse.failed') {
+    // Reply 400 Bad Request; the parser's own message is NOT sent back because it can reveal internal details
+    return res.status(400).json({ error: 'Malformed JSON: request body could not be parsed' });
+  }
+
+  // body-parser sets these types when the client sends a body encoding or charset the server does not support
+  if (err.type === 'encoding.unsupported' || err.type === 'charset.unsupported') {
+    // Reply 415 Unsupported Media Type
+    return res.status(415).json({ error: 'Unsupported request encoding or charset' });
+  }
+
+  // Any other client-side error that already carries a 4xx status (for example an aborted request) is passed through as a 400-level answer
+  const status = err.status || err.statusCode;
+  // Check that the status is a real 4xx client error
+  if (status >= 400 && status < 500) {
+    // Reply with that 4xx status and a generic message
+    return res.status(status).json({ error: 'Bad request' });
+  }
+
+  // Anything left is an unexpected server fault: log the full details on the server only
+  console.error('[Unhandled Error]:', err.stack || err);
+  // Reply 500 with a generic message so database or code details never leak to the client
+  return res.status(500).json({ error: 'Internal server error' });
+});
+
+// ==============================================================================
 // START APPLICATION RUNTIME
 // FIX: moved to the bottom so every route above is registered before the server begins listening
 // ==============================================================================
