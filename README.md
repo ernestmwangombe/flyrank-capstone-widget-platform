@@ -239,7 +239,7 @@ Each stage has an integration script. Start the app first (`docker compose up`),
 ```bash
 bash test_stage_1.sh   # register/login, auth rejection, CRUD, tenant isolation
 bash test_stage_2.sh   # embed snippet generation
-bash test_stage_3.sh   # versioned bundle, cache headers, config endpoint
+bash test_stage_3.sh   # versioned bundle, cache headers, config endpoint, loader safety
 bash test_stage_4.sh   # CORS preflight, submission, validation, 404, oversized payload, malformed JSON, JSON 404
 ```
 
@@ -247,7 +247,7 @@ bash test_stage_4.sh   # CORS preflight, submission, validation, 404, oversized 
 |--------|--------|
 | `test_stage_1.sh` | Register, duplicate/short-password rejection, login, wrong password; no header, made-up Bearer string, `x-tenant-id` header and tampered token all return `401`; create/list/update/delete widget; tenant B gets `404` when reading, updating or deleting tenant A's widget and the widget is left unchanged |
 | `test_stage_2.sh` | `embed_snippet` present on create and fetch, bound to the right widget id and versioned URL |
-| `test_stage_3.sh` | `/widget.v1.js` status, content type and immutable cache; config endpoint headers; `400`/`404` handling; unknown version `404`; legacy URL short cache; snippet uses the versioned URL |
+| `test_stage_3.sh` | `/widget.v1.js` status, content type and immutable cache; config endpoint headers; `400`/`404` handling; unknown version `404`; legacy URL short cache; snippet uses the versioned URL; loader sets widget text with `textContent`, never `innerHTML` |
 | `test_stage_4.sh` | Preflight `204`, valid submission `201`, missing data `400`, unknown widget `404`, oversized body `413` as JSON, malformed JSON `400` as JSON, unknown route `404` as JSON |
 
 Raw outputs are pasted in [`EVIDENCE.md`](EVIDENCE.md). Design decisions, where AI helped and where it was wrong are in [`BUILDLOG.md`](BUILDLOG.md).
@@ -260,7 +260,7 @@ Raw outputs are pasted in [`EVIDENCE.md`](EVIDENCE.md). Design decisions, where 
 |-------|----------------|-------------|
 | **1. Widget management API** | Tenant registration and login, signed JWT authentication, full widget CRUD, tenant isolation on every query | `test_stage_1.sh` |
 | **2. Embed snippet generation** | Every widget response includes a ready-to-paste `<script>` embed snippet | `test_stage_2.sh` |
-| **3. Fast, cached widget delivery** | Versioned widget bundle (`/widget.v1.js`, cached for a year), public config endpoint (cached for 60 s), CORS, `no-store` on error responses | `test_stage_3.sh` |
+| **3. Fast, cached widget delivery** | Versioned widget bundle (`/widget.v1.js`, cached for a year), public config endpoint (cached for 60 s), CORS, `no-store` on error responses, loader that renders widget text as plain text | `test_stage_3.sh` |
 | **4. Public submission endpoint** | Cross-origin submissions with CORS and preflight, Zod input validation, widget existence check, storage in PostgreSQL, oversized-payload rejection, JSON error responses (global error handler) | `test_stage_4.sh` |
 
 ---

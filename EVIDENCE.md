@@ -2,7 +2,7 @@
 
 Every proof below is raw terminal output from a real run: Git Bash on Windows with Docker Desktop, started with `docker compose up --build`, against the PostgreSQL 15 container. Nothing is edited except that the shell prompt lines and Docker's "`version` is obsolete" warning were removed, and the output of each script is shown under its own heading.
 
-**Run date:** 2026-10-02 for the seed step and Stages 1 to 3; Stage 4 was re-run afterwards, once the JSON error handler was added.
+**Run date:** 2026-10-02 for the seed step and Stages 1 and 2. Stage 4 was re-run after the JSON error handler was added, and Stage 3 was re-run after the loader-safety test (Suite 6) was added.
 **Stages covered:** 1 to 4
 
 The earlier version of this file was replaced. It predated the authentication fix, showed a mock token (`tenant_alpha_token_123`) and presented hand-formatted tables rather than raw output, so it no longer matched the code or the test scripts.
@@ -138,7 +138,7 @@ STAGE 2 VERIFICATION COMPLETE: ALL CHECKS PASSED!
 ## Stage 3: Fast, cached widget delivery
 
 **Command:** `bash test_stage_3.sh`
-**Result:** 14 passed, 0 failed.
+**Result:** 16 passed, 0 failed. Suites 1 and 5 cover the versioned bundle, Suites 2 to 4 cover the config endpoint and its cache headers, and Suite 6 checks that the loader shows widget text as plain text (no `innerHTML`).
 
 ```
 ======================================================================
@@ -168,10 +168,14 @@ STAGE 2 VERIFICATION COMPLETE: ALL CHECKS PASSED!
   ✅ PASS: GET /widget.v999.js Cache-Control Header (Value: no-store)
   ✅ PASS: GET /widget.js (legacy) HTTP Status Code (Value: 200)
   ✅ PASS: GET /widget.js (legacy) Short Cache-Control (Value: public, max-age=60)
-  ✅ PASS: embed_snippet uses the versioned bundle URL (Value: <script src="http://localhost:3000/widget.v1.js?id=4" defer></script>)
+  ✅ PASS: embed_snippet uses the versioned bundle URL (Value: <script src="http://localhost:3000/widget.v1.js?id=8" defer></script>)
+
+[Test Suite 6] Verifying the loader shows widget text safely...
+  ✅ PASS: loader does not use innerHTML
+  ✅ PASS: loader sets widget text with textContent
 
 ======================================================================
- Test Execution Summary: 14 Passed, 0 Failed
+ Test Execution Summary: 16 Passed, 0 Failed
 ======================================================================
 ```
 

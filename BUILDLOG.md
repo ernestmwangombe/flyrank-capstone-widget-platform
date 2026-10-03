@@ -57,7 +57,7 @@ What I did about it (commit `fix(stage-1,3): restore JWT auth and full CRUD, add
 - **Defensive Error Handling:** Added parameter parsing (`parseInt`) on `GET /api/widgets/:id/config`. Non-numeric parameters return `400 Bad Request`, and missing records return `404 Not Found` paired with `Cache-Control: no-store` to prevent caching error states on downstream proxy caches.
 
 ### Correction added 2026-10-02: the bundle was not really versioned
-The first version served `/widget.js` as `immutable` for a year at one fixed URL. After any code change, browsers that had cached it would never fetch the new script, which is the stale-code problem the brief warns about. The line in the old log about updating `setup_db.js` for seeding is also out of date: seeding now happens through `schema.sql`, and `setup_db.js` is no longer used.
+The first version served `/widget.js` as `immutable` for a year at one fixed URL. After any code change, browsers that had cached it would never fetch the new script, which is the stale-code problem the brief warns about. The line in the old log about updating `setup_db.js` for seeding is also out of date: seeding now happens through `schema.sql`, and `setup_db.js` has since been deleted.
 
 What I changed:
 - The bundle is now served at `/widget.v1.js`. The version comes from `WIDGET_VERSION` (default `1`), so a new release gets a new URL and can be cached for a year safely.
@@ -103,7 +103,10 @@ Malformed or oversized bodies returned Express's default HTML error page (correc
 
 ---
 
-## Known issues I have noticed and not fixed
-- The public config endpoint returns `err.message` in a `details` field when the database query fails, which can leak internal error text. The widget management routes already return a generic message.
-- The widget loader builds its card with `innerHTML` using the widget's `title` and `buttonText`, so a tenant could inject markup into their own widget. These values should be set with `textContent`.
-- `fix_db.js`, `setup_db.js`, `src/app.js`, `src/middleware/rateLimiter.js` and a duplicate root `submission.js` are unused and still tracked.
+## Cleanup and security fixes (found while reviewing my own work)
+I wrote down three problems in an earlier version of this log; all three are now fixed.
+- **Database error text leaked from the public config endpoint.** On a database failure it returned `err.message` in a `details` field. It now returns only `{ "error": "Database query failed" }`; the full error is still logged on the server. I checked this by stopping the database and calling the endpoint.
+- **The widget loader built its card with `innerHTML`.** A widget title such as `<img src=x onerror=...>` would have run as markup on the customer's website. The loader now creates the elements with DOM methods and sets the title and button label with `textContent`. I verified it by running the served script in a simulated browser (jsdom) with a hostile title: the text was shown literally, no `<img>` or `<script>` element was created, and nothing executed. `test_stage_3.sh` has a new Test Suite 6 that fails if `innerHTML` comes back.
+- **Unused files removed.** I deleted `fix_db.js`, `setup_db.js`, `src/app.js`, `src/middleware/rateLimiter.js` and a duplicate root `submission.js`. Nothing imported or referenced them, and `rateLimiter.js` depended on a package that is not installed.
+
+Remaining limitations are listed in the README.
