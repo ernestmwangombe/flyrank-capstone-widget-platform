@@ -21,6 +21,10 @@ services:
       - DB_NAME=flyrank_db
       # FIX: read JWT_SECRET from your shell or .env (Compose substitutes ${...} from .env); falls back to a DEV-ONLY value so a clean clone still boots
       - JWT_SECRET=${JWT_SECRET:-dev_only_change_me}
+      # Stage 5: development-only test switches (headers such as X-Test-Geo-Down). Set TEST_CONTROLS=false in any real deployment
+      - TEST_CONTROLS=${TEST_CONTROLS:-true}
+      # Stage 5: "mock" = built-in fake geo providers (offline and repeatable); set GEO_MODE=real to call ip-api.com and ipapi.co
+      - GEO_MODE=${GEO_MODE:-mock}
     # -------------------------------------------------------------------------
     # Development Hot-Reloading via Bind Mounts
     # Maps local directory to /app inside container while preserving node_modules

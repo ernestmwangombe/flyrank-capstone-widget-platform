@@ -25,6 +25,9 @@ import pool from './db.js';
 // Import Stage 4 submission router module
 import submissionRoutes from './src/routes/submission.js';
 
+// Import Stage 5 per-IP rate limiter (the per-widget limiter lives inside the submission route)
+import { ipRateLimiter } from './src/middleware/rateLimiter.js';
+
 // Load environment variables into process.env
 dotenv.config();
 
@@ -65,8 +68,15 @@ app.use(cors({
   origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   // FIX: x-tenant-id removed from the allowed headers because tenant identity now comes only from the signed token
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  // FIX (Stage 5): let browser code on other origins read the Retry-After header that comes with a 429 response
+  exposedHeaders: ['Retry-After']
 }));
+
+// FIX (Stage 5): per-IP rate limit for the whole public /api/embed path.
+// It sits BEFORE the JSON body parser on purpose, so a flood is turned away (429) before any body is read or parsed.
+// CORS preflight (OPTIONS) requests are skipped inside the limiter.
+app.use('/api/embed', ipRateLimiter);
 
 // Enable JSON middleware to parse incoming JSON payloads with a strict size limit
 app.use(express.json({ limit: '10kb' }));

@@ -31,6 +31,7 @@ CREATE TABLE submissions (
   widget_id INT NOT NULL REFERENCES widgets(id) ON DELETE CASCADE, -- Foreign key binding submission directly to parent widget
   payload JSONB NOT NULL,                                      -- Native JSONB document capturing arbitrary form field key-value pairs
   metadata JSONB DEFAULT '{}'::jsonb,                          -- JSONB document storing client browser metadata (e.g., IP, page_url)
+  geo JSONB,                                                   -- Location looked up from the visitor's IP (country, city, provider); NULL when no provider could answer
   created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP -- Audit timestamp recording exact submission receipt in UTC
 );
 

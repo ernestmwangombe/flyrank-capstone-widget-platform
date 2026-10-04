@@ -15,8 +15,8 @@ run: "docker compose up --build"
 # Seed step: pipes schema.sql into psql inside the running PostgreSQL container (drops and recreates the tables, then inserts demo tenant 1 and widget 1); uses stdin so no /path argument is mangled by Git Bash on Windows
 seed: "docker compose exec -T postgres psql -U postgres -d flyrank_db < schema.sql"
 
-# Optional test command: runs the four stage scripts in order and stops at the first failure (needs bash, curl and jq, with the system already running)
-test: "bash test_stage_1.sh && bash test_stage_2.sh && bash test_stage_3.sh && bash test_stage_4.sh"
+# Optional test command: runs the five stage scripts in order and stops at the first failure (needs bash, curl, jq and the docker compose CLI, with the system already running)
+test: "bash test_stage_1.sh && bash test_stage_2.sh && bash test_stage_3.sh && bash test_stage_4.sh && bash test_stage_5.sh"
 
 # Endpoints the evaluator can probe (auth: none = public, bearer = needs the JWT returned by login; expect = the success status)
 endpoints:
