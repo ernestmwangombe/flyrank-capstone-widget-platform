@@ -28,6 +28,12 @@ import submissionRoutes from './src/routes/submission.js';
 // Import Stage 5 per-IP rate limiter (the per-widget limiter lives inside the submission route)
 import { ipRateLimiter } from './src/middleware/rateLimiter.js';
 
+// FIX (Stage 6): the login check now lives in its own file so the widget routes and the dashboard routes share one copy
+import { authenticateTenant } from './src/middleware/authenticateTenant.js';
+
+// Import the Stage 6 owner dashboard router
+import dashboardRoutes from './src/routes/dashboard.js';
+
 // Load environment variables into process.env
 dotenv.config();
 
@@ -334,43 +340,7 @@ const loginHandler = async (req, res) => {
 app.post(['/api/auth/register', '/api/v1/admin/register'], registerHandler);
 app.post(['/api/auth/login', '/api/v1/admin/login'], loginHandler);
 
-// ==============================================================================
-// AUTHENTICATION & MULTI-TENANT MIDDLEWARE
-// FIX: only a valid, unexpired JWT signed with JWT_SECRET is accepted.
-// The old version trusted any 'x-tenant-id' header or any Bearer string as the tenant id.
-// ==============================================================================
-
-const authenticateTenant = (req, res, next) => {
-  // Read the Authorization header, or an empty string if it is absent
-  const authHeader = req.headers['authorization'] || '';
-
-  // Split "Bearer <token>" into its two parts
-  const [scheme, token] = authHeader.split(' ');
-
-  // Reject requests that do not use the Bearer scheme or have no token
-  if (scheme !== 'Bearer' || !token) {
-    return res.status(401).json({ error: 'Unauthorized: Missing or malformed Authorization header' });
-  }
-
-  try {
-    // Verify the signature and expiry; the algorithms list blocks "alg: none" token tricks
-    const payload = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] });
-
-    // Make sure the token actually carries a numeric tenant id
-    if (!Number.isInteger(payload.tenant_id)) {
-      return res.status(401).json({ error: 'Unauthorized: Invalid token payload' });
-    }
-
-    // Store the verified tenant id on the request; every query below filters by it
-    req.tenantId = payload.tenant_id;
-
-    // Hand control to the next handler
-    return next();
-  } catch (err) {
-    // Covers forged, tampered, malformed and expired tokens alike
-    return res.status(401).json({ error: 'Unauthorized: Invalid or expired token' });
-  }
-};
+// NOTE (Stage 6): authenticateTenant used to be defined here. It was moved, unchanged, to src/middleware/authenticateTenant.js.
 
 // ==============================================================================
 // HEALTH & DIAGNOSTIC ROUTES
@@ -584,6 +554,14 @@ app.put('/api/v1/admin/widgets/:id', authenticateTenant, updateWidgetHandler);
 
 app.delete('/api/widgets/:id', authenticateTenant, deleteWidgetHandler);
 app.delete('/api/v1/admin/widgets/:id', authenticateTenant, deleteWidgetHandler);
+
+// ==============================================================================
+// OWNER DASHBOARD ROUTES (STAGE 6)
+// Authenticated and tenant-isolated; mounted on both prefixes like the widget routes
+// ==============================================================================
+
+app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/v1/admin/dashboard', dashboardRoutes);
 
 // ==============================================================================
 // PUBLIC DELIVERY ROUTES (STAGE 3 - CACHED PUBLIC ENDPOINTS)

@@ -15,8 +15,8 @@ run: "docker compose up --build"
 # Seed step: pipes schema.sql into psql inside the running PostgreSQL container (drops and recreates the tables, then inserts demo tenant 1 and widget 1); uses stdin so no /path argument is mangled by Git Bash on Windows
 seed: "docker compose exec -T postgres psql -U postgres -d flyrank_db < schema.sql"
 
-# Optional test command: runs the five stage scripts in order and stops at the first failure (needs bash, curl, jq and the docker compose CLI, with the system already running)
-test: "bash test_stage_1.sh && bash test_stage_2.sh && bash test_stage_3.sh && bash test_stage_4.sh && bash test_stage_5.sh"
+# Optional test command: runs the six stage scripts in order and stops at the first failure (needs bash, curl, jq and the docker compose CLI, with the system already running)
+test: "bash test_stage_1.sh && bash test_stage_2.sh && bash test_stage_3.sh && bash test_stage_4.sh && bash test_stage_5.sh && bash test_stage_6.sh"
 
 # Endpoints the evaluator can probe (auth: none = public, bearer = needs the JWT returned by login; expect = the success status)
 endpoints:
@@ -77,3 +77,25 @@ endpoints:
     method: POST                         # HTTP method
     auth: none                           # No token needed
     expect: 201                          # Success status
+
+  # ---- Owner dashboard, tenant-isolated (Stage 6; also available under /api/dashboard) ----
+  - path: /api/v1/admin/dashboard/submissions            # The owner's submissions, newest first (filters: widget_id, from, to, limit, offset)
+    method: GET                                          # HTTP method
+    auth: bearer                                         # Needs Authorization: Bearer <token>
+    expect: 200                                          # Success status
+  - path: /api/v1/admin/dashboard/submissions/:id        # One submission (404 if it belongs to another tenant)
+    method: GET                                          # HTTP method
+    auth: bearer                                         # Needs Authorization: Bearer <token>
+    expect: 200                                          # Success status
+  - path: /api/v1/admin/dashboard/stats/widgets          # Per-widget totals and recent counts
+    method: GET                                          # HTTP method
+    auth: bearer                                         # Needs Authorization: Bearer <token>
+    expect: 200                                          # Success status
+  - path: /api/v1/admin/dashboard/stats/over-time        # Submissions per UTC day (query: days, widget_id)
+    method: GET                                          # HTTP method
+    auth: bearer                                         # Needs Authorization: Bearer <token>
+    expect: 200                                          # Success status
+  - path: /api/v1/admin/dashboard/stats/geo              # Submissions grouped by visitor country (query: days, widget_id)
+    method: GET                                          # HTTP method
+    auth: bearer                                         # Needs Authorization: Bearer <token>
+    expect: 200                                          # Success status

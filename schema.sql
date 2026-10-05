@@ -54,8 +54,9 @@ SELECT setval(pg_get_serial_sequence('widgets', 'id'), (SELECT COALESCE(MAX(id),
 -- Create B-Tree index on widgets.tenant_id to optimize tenant-isolated dashboard queries
 CREATE INDEX idx_widgets_tenant_id ON widgets(tenant_id);
 
--- Create B-Tree index on submissions.widget_id to accelerate submission filtering by widget
-CREATE INDEX idx_submissions_widget_id ON submissions(widget_id);
+-- FIX (Stage 6): composite index on (widget_id, created_at DESC). It serves "all submissions of a widget" (widget_id alone, as before)
+-- AND the dashboard's newest-first lists and time-window filters, so the old single-column index on widget_id is no longer needed.
+CREATE INDEX idx_submissions_widget_created ON submissions(widget_id, created_at DESC);
 
 -- Create GIN (Generalized Inverted Index) on submissions.payload to enable fast JSON key-value searches
 CREATE INDEX idx_submissions_payload_gin ON submissions USING GIN (payload);
