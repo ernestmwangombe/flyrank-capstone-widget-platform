@@ -3,8 +3,8 @@
 Every proof below is raw terminal output from a real run: Git Bash on Windows with Docker Desktop, started with `docker compose up --build`, against the PostgreSQL 15 container. Nothing is edited except that the shell prompt lines and Docker's "`version` is obsolete" warning were removed, and the output of each script is shown under its own heading.
 
 **Run date:** 2026-10-02 for the seed step and Stages 1 and 2. Stage 4 was re-run after the JSON error handler was added, and Stage 3 was re-run after the loader-safety test (Suite 6) was added.
-Stage 5 was run afterwards on the same Docker stack.
-**Stages covered:** 1 to 5
+Stage 5 was run afterwards on the same Docker stack, and Stage 6 after that, on a database reset with `docker compose down -v`.
+**Stages covered:** 1 to 6
 
 The earlier version of this file was replaced. It predated the authentication fix, showed a mock token (`tenant_alpha_token_123`) and presented hand-formatted tables rather than raw output, so it no longer matched the code or the test scripts.
 
@@ -15,7 +15,7 @@ The earlier version of this file was replaced. It predated the authentication fi
 | Requirement (brief, Section 6) | Proof in this file |
 |---|---|
 | Authenticated CRUD endpoints for widgets; requests without valid auth are rejected | [Stage 1](#stage-1-widget-management-api): sections 3, 4, 5 and 8 |
-| Multi-tenant isolation (tenant A cannot read or modify tenant B's widgets) | [Stage 1](#stage-1-widget-management-api): section 7 |
+| Multi-tenant isolation (tenant A cannot read or modify tenant B's widgets or submissions) | Widgets: [Stage 1](#stage-1-widget-management-api), section 7. Submissions: [Stage 6](#stage-6-owner-dashboard-api), Test Suite 3 |
 | Embed snippet generated per widget | [Stage 2](#stage-2-embed-snippet-generation) |
 | Public config endpoint with correct HTTP cache headers | [Stage 3](#stage-3-fast-cached-widget-delivery): Test Suites 2 to 4 |
 | Widget JavaScript served as a versioned bundle | [Stage 3](#stage-3-fast-cached-widget-delivery): Test Suites 1 and 5 |
@@ -26,8 +26,12 @@ The earlier version of this file was replaced. It predated the authentication fi
 | At least one spam-prevention technique demonstrably blocks a spam submission | [Stage 5](#stage-5-protection-enrichment-and-safe-side-effects): Test Suite 1 (honeypot) |
 | IP-to-geo enrichment uses a provider fallback chain; all providers down still stores the submission without geo | [Stage 5](#stage-5-protection-enrichment-and-safe-side-effects): Test Suite 2 |
 | A failing confirmation email does not prevent the submission from being stored | [Stage 5](#stage-5-protection-enrichment-and-safe-side-effects): Test Suite 3 |
+| The authenticated owner views their submissions with basic analytics (counts over time, per-widget stats, geo breakdown) | [Stage 6](#stage-6-owner-dashboard-api): Test Suites 2 and 4 |
+| A valid submission is stored, returns 2xx and is visible via the dashboard API | [Stage 6](#stage-6-owner-dashboard-api): Test Suite 5 |
 
-Note on isolation: the tenant isolation proof covers widgets (read, update, delete). The API has no endpoint that lists submissions yet, so isolation of submissions is not demonstrated here.
+Notes:
+- Tenant isolation of widgets (read, update, delete) is shown in Stage 1. Tenant isolation of submissions (list, fetch by id, filter by another owner's widget, statistics) is shown in Stage 6.
+- The "visible via the dashboard API" proof posts the submission with `curl`; it does not use a browser page on a second origin.
 
 ---
 
@@ -366,3 +370,179 @@ flyrank_postgres  | DETAIL:  Key (email)=(tenant_a_1791122610@example.com) alrea
 ```
 
 It comes from Stage 1's "Duplicate Registration Rejected" check, which registers the same email twice on purpose. The database refuses the second insert, and the API turns that into the `409` response the test expects.
+
+---
+
+## Stage 6: Owner dashboard API
+
+**Command:** `bash test_stage_6.sh`
+**Result:** 75 passed, 0 failed. This was the first run after `docker compose down -v` and a rebuild, so it ran on a freshly seeded database.
+
+| Suite | What it proves |
+|---|---|
+| Setup | Two separate owners (A and B) are created. Owner A has two widgets and four submissions (one with provider A's geo, one with provider B's, one with no geo, and one on the second widget). Owner B has one widget and two submissions. |
+| 1 | Every dashboard endpoint returns `401` without a token, with a made-up token and with a tampered token |
+| 2 | Owner A's list returns exactly their 4 submissions, newest first, with geo data; paging works and the pages do not overlap; filtering by widget and by date window works; nine kinds of bad query values (including an SQL-injection attempt) return `400` with the field named |
+| 3 | Tenant isolation: owner B sees only their 2 submissions; owner B cannot fetch owner A's submission by id (`404`) and cannot filter by owner A's widget on any endpoint (`404`); the reverse holds for owner A; unknown ids return `404` and non-numeric ids return `400` |
+| 4 | Per-widget stats (totals, last 24 hours, enriched count, busiest first), counts over time (one entry per UTC day, counts add up, ascending dates, bad `days` values return `400`) and the geo breakdown (Mockland A 2, Mockland B 1, Unknown 1, 50 percent for the largest group) return the expected numbers, and each owner sees only their own |
+| 5 | A new public submission is accepted with `201`, appears as the newest item in its owner's dashboard, is hidden from the other owner (`404`) and raises the owner's total from 4 to 5 |
+
+The geo values are the built-in mock providers (`GEO_MODE=mock`), the same as in Stage 5.
+
+```
+==========================================================
+ Starting Stage 6: Owner Dashboard API
+ Target API Server: http://localhost:3000
+==========================================================
+
+[Setup] Creating owners A and B, their widgets and six submissions...
+  widgets: A1=2 A2=3 B1=4
+  ✅ PASS: setup: all six submissions accepted (Value: 201 )
+
+[Test Suite 1] Authentication: no valid token, no dashboard...
+  ✅ PASS: no token rejected on /submissions (Value: 401)
+  ✅ PASS: no token rejected on /submissions/1 (Value: 401)
+  ✅ PASS: no token rejected on /stats/widgets (Value: 401)
+  ✅ PASS: no token rejected on /stats/over-time (Value: 401)
+  ✅ PASS: no token rejected on /stats/geo (Value: 401)
+  ✅ PASS: made-up token rejected (Value: 401)
+  ✅ PASS: tampered token rejected (Value: 401)
+
+[Test Suite 2] Submissions list for owner A...
+  ✅ PASS: owner A list returns 200 (Value: 200)
+  ✅ PASS: owner A sees exactly their 4 submissions (pagination total) (Value: 4)
+  ✅ PASS: every row belongs to owner A's widgets (Value: 0)
+  ✅ PASS: newest submission is listed first (Value: A2 first)
+  ✅ PASS: rows include the geo data (Value: Mockland A)
+  ✅ PASS: page 1 holds 2 rows (Value: 2)
+  ✅ PASS: page 2 holds 2 rows (Value: 2)
+  ✅ PASS: pages do not overlap (Value: 4)
+  ✅ PASS: pagination block reports limit and offset (Value: 2/2)
+  ✅ PASS: filter by widget A1 returns 3 submissions (Value: 3)
+  ✅ PASS: filter by widget A2 returns 1 submission (Value: 1)
+  ✅ PASS: a window entirely in the past returns 0 rows (Value: 0)
+  ✅ PASS: a window from 2000 to tomorrow returns all 4 (Value: 4)
+  ✅ PASS: bad query 'limit=0' gives 400 (Value: 400)
+  ✅ PASS: bad query 'limit=101' gives 400 (Value: 400)
+  ✅ PASS: bad query 'limit=abc' gives 400 (Value: 400)
+  ✅ PASS: bad query 'offset=-1' gives 400 (Value: 400)
+  ✅ PASS: bad query 'widget_id=abc' gives 400 (Value: 400)
+  ✅ PASS: bad query 'widget_id=1;DROP%20TABLE%20widgets' gives 400 (Value: 400)
+  ✅ PASS: bad query 'from=yesterday' gives 400 (Value: 400)
+  ✅ PASS: bad query 'from=2026-13-45' gives 400 (Value: 400)
+  ✅ PASS: bad query 'from=2026-10-05&to=2026-10-01' gives 400 (Value: 400)
+  ✅ PASS: validation error lists the field (Value: limit)
+
+[Test Suite 3] Tenant isolation: each owner sees only their own data...
+  ✅ PASS: owner B sees exactly their 2 submissions (Value: 2)
+  ✅ PASS: owner B's list contains none of owner A's widgets (Value: 0)
+  ✅ PASS: owner B cannot read owner A's submission by id (404) (Value: 404)
+  ✅ PASS: owner A can read their own submission by id (200) (Value: 200)
+  ✅ PASS: single submission has the right payload (Value: A1 first)
+  ✅ PASS: owner A cannot read owner B's submission by id (404) (Value: 404)
+  ✅ PASS: owner B filtering by A's widget on /submissions?widget_id=2 gives 404 (Value: 404)
+  ✅ PASS: owner B filtering by A's widget on /stats/over-time?widget_id=2 gives 404 (Value: 404)
+  ✅ PASS: owner B filtering by A's widget on /stats/geo?widget_id=2 gives 404 (Value: 404)
+  ✅ PASS: a submission id that does not exist gives 404 (Value: 404)
+  ✅ PASS: a non-numeric submission id gives 400 (Value: 400)
+
+[Test Suite 4] Analytics endpoints...
+  ✅ PASS: per-widget stats return 200 (Value: 200)
+  ✅ PASS: owner A sees only their 2 widgets (Value: 2)
+  ✅ PASS: widget A1 total_submissions (Value: 3)
+  ✅ PASS: widget A2 total_submissions (Value: 1)
+  ✅ PASS: widget A1 last_24h (Value: 3)
+  ✅ PASS: widget A1 enriched_submissions (one had no geo) (Value: 2)
+  ✅ PASS: widgets are ordered by total, busiest first (Value: 2)
+  ✅ PASS: owner B sees only their 1 widget (Value: 1)
+  ✅ PASS: owner B's widget is B1 with 2 submissions (Value: 4/2)
+  ✅ PASS: over-time returns 200 (Value: 200)
+  ✅ PASS: over-time has one entry per day (7) (Value: 7)
+  ✅ PASS: over-time counts add up to 4 (Value: 4)
+  ✅ PASS: over-time total field is 4 (Value: 4)
+  ✅ PASS: days are in ascending order (Value: true)
+  ✅ PASS: over-time filtered to widget A2 adds up to 1 (Value: 1)
+  ✅ PASS: days=0 gives 400 (Value: 400)
+  ✅ PASS: days=366 gives 400 (Value: 400)
+  ✅ PASS: default window is 30 days (Value: 30)
+  ✅ PASS: geo breakdown returns 200 (Value: 200)
+  ✅ PASS: geo total is 4 (Value: 4)
+  ✅ PASS: Mockland A count (Value: 2)
+  ✅ PASS: Mockland B count (Value: 1)
+  ✅ PASS: Unknown count (no geo data) (Value: 1)
+  ✅ PASS: Mockland A is 50 percent (Value: 50)
+  ✅ PASS: largest country is listed first (Value: Mockland A)
+  ✅ PASS: geo filtered to widget A2 has total 1 (Value: 1)
+  ✅ PASS: geo with days=1 still counts today's 4 (Value: 4)
+  ✅ PASS: owner B's geo total is 2 (Value: 2)
+  ✅ PASS: geo days=abc gives 400 (Value: 400)
+
+[Test Suite 5] A new public submission becomes visible to its owner...
+  ✅ PASS: visitor submission accepted (Value: 201)
+  ✅ PASS: the new submission is the newest item in the owner's dashboard (Value: 7)
+  ✅ PASS: the new submission is hidden from owner B (404) (Value: 404)
+  ✅ PASS: owner A's total is now 5 (Value: 5)
+
+==========================================================
+ Test Execution Summary: 75 Passed, 0 Failed
+==========================================================
+```
+
+---
+
+## Full regression run: Stages 1 to 6 together
+
+After Stage 6 was added, the database volume was removed (`docker compose down -v`), the image was rebuilt and the stack was started again. The PostgreSQL log shows `schema.sql` running automatically on the new volume, including the three index creations (one of them the new composite index on submissions):
+
+```
+flyrank_postgres  |
+flyrank_postgres  | /usr/local/bin/docker-entrypoint.sh: running /docker-entrypoint-initdb.d/01-schema.sql
+flyrank_postgres  | DROP TABLE
+flyrank_postgres  | psql:/docker-entrypoint-initdb.d/01-schema.sql:5: NOTICE:  table "submissions" does not exist, skipping
+flyrank_postgres  | DROP TABLE
+flyrank_postgres  | psql:/docker-entrypoint-initdb.d/01-schema.sql:6: NOTICE:  table "widgets" does not exist, skipping
+flyrank_postgres  | psql:/docker-entrypoint-initdb.d/01-schema.sql:7: NOTICE:  table "tenants" does not exist, skipping
+flyrank_postgres  | DROP TABLE
+Container flyrank_postgres Healthy
+flyrank_postgres  | CREATE TABLE
+flyrank_postgres  | CREATE TABLE
+flyrank_postgres  | CREATE TABLE
+flyrank_postgres  | INSERT 0 1
+flyrank_postgres  | INSERT 0 1
+flyrank_postgres  |  setval
+flyrank_postgres  | --------
+flyrank_postgres  |       1
+flyrank_postgres  | (1 row)
+flyrank_postgres  |
+flyrank_postgres  |  setval
+flyrank_postgres  | --------
+flyrank_postgres  |       1
+flyrank_postgres  | (1 row)
+flyrank_postgres  |
+flyrank_postgres  | CREATE INDEX
+flyrank_postgres  | CREATE INDEX
+flyrank_postgres  | CREATE INDEX
+flyrank_postgres  |
+```
+
+All six stage scripts were then run back to back:
+
+```
+bash test_stage_1.sh
+bash test_stage_2.sh
+bash test_stage_3.sh
+bash test_stage_4.sh
+bash test_stage_5.sh
+bash test_stage_6.sh
+```
+
+**Result:** every script passed. These are the summary lines they printed:
+
+| Script | Summary line printed |
+|---|---|
+| `test_stage_1.sh` | `ALL STAGE 1 TESTS PASSED SUCCESSFULLY!` |
+| `test_stage_2.sh` | `STAGE 2 VERIFICATION COMPLETE: ALL CHECKS PASSED!` |
+| `test_stage_3.sh` | `Test Execution Summary: 16 Passed, 0 Failed` |
+| `test_stage_4.sh` | `STAGE 4 VERIFICATION COMPLETE: ALL CHECKS PASSED!` |
+| `test_stage_5.sh` | `Test Execution Summary: 34 Passed, 0 Failed` |
+| `test_stage_6.sh` | `Test Execution Summary: 75 Passed, 0 Failed` |

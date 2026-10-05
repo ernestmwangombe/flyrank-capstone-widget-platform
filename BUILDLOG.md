@@ -2,7 +2,7 @@
 
 An honest record of where AI helped, where it was wrong, and what I changed. Entries for Stages 1 to 3 are kept as originally written, with corrections added where problems were found later.
 
-**How to read this log.** "The AI" means the AI assistant I worked with (Claude, in chat sessions). "I" means me. For the fixes after Stage 3, Stage 4 and Stage 5, the pattern was the same: the AI diagnosed problems and wrote the code from the files, logs and screenshots I gave it, and tested it in its own environment, which has no Docker and no access to the real geo services. I decided what to work on next, applied the files to my project, ran every test script on my own machine (Git Bash on Windows with Docker Desktop), pasted the real output back, and made the commits. Checks the AI ran in its own environment are labelled as such and are not my test runs.
+**How to read this log.** "The AI" means the AI assistant I worked with (Claude, in chat sessions). "I" means me. For the fixes after Stage 3, and for Stages 4, 5 and 6, the pattern was the same: the AI diagnosed problems and wrote the code from the files, logs and screenshots I gave it, and tested it in its own environment, which has no Docker and no access to the real geo services. I decided what to work on next, applied the files to my project, ran every test script on my own machine (Git Bash on Windows with Docker Desktop), pasted the real output back, and made the commits. Checks the AI ran in its own environment are labelled as such and are not my test runs.
 
 ---
 
@@ -163,5 +163,45 @@ In the burst suites the split between accepted and `429` depends on machine spee
 
 ### Known limitations
 - Rate limit buckets and queued confirmation emails are in memory only.
-- Only the submission path is split into logic and data layers; the auth and widget CRUD routes are still written inside `server.js`.
+- Only the submission path and (from Stage 6) the dashboard are split into HTTP, logic and data layers; the auth and widget CRUD routes are still written inside `server.js`, and only the login check was moved out of it.
 - Schema changes are made by editing `schema.sql` and resetting the database volume, not through migrations.
+
+---
+
+## Stage 6: Owner Dashboard API
+**Focus:** Aggregation queries, and tenant isolation of submissions.
+
+### What the AI did
+- Read my existing `server.js`, schema and validation code first, found that the login check was defined inside `server.js`, and moved it unchanged into `src/middleware/authenticateTenant.js` so the widget routes and the dashboard routes share one copy.
+- Wrote the dashboard in three layers, with a comment on every line: `src/routes/dashboard.js` (HTTP), `src/services/dashboardService.js` (logic), `src/repositories/dashboardRepository.js` (SQL) and `src/middleware/validateDashboard.js` (input checks).
+- Changed `schema.sql` (a composite index), `server.js` (mount the dashboard, import the moved login check), `capstone.yaml` and the README.
+- Wrote `test_stage_6.sh`.
+
+### What I did
+- Gave the AI the Stage 6 section of the brief and asked it to continue.
+- Was shown the main choices below before the code was written, and told the AI to carry on.
+- Applied the files, removed the database volume with `docker compose down -v`, rebuilt the stack, and ran `test_stage_6.sh` on my machine: 75 passed, 0 failed.
+- Ran all six stage scripts back to back on my machine: every script passed. The output is in `EVIDENCE.md`.
+
+### Design decisions (proposed by the AI, approved by me)
+- **Five endpoints under `/api/dashboard`** (also under `/api/v1/admin/dashboard`): the submissions list with paging and filters, one submission by id, per-widget stats, counts over time and a geo breakdown. All need a login token.
+- **Tenant isolation is enforced in the SQL, not in the route.** Every dashboard query joins `submissions` to `widgets` and filters on `widgets.tenant_id`, which comes from the verified token. Asking for another owner's widget or submission returns `404`, the same as one that does not exist, so ids cannot be probed.
+- **All dates and day buckets are UTC.** Counts over time include days with zero submissions so the series has no gaps. A bare `to` date includes that whole day.
+- **Input is validated at the boundary.** Page size 1 to 100, offset, widget id, ISO dates and number of days are checked, and bad values return a `400` that names the field. Query values are always passed to the database as parameters, never pasted into the SQL.
+- **No HTML dashboard.** The brief says endpoints plus a simple table are enough, so the README shows `curl` and `jq` commands that print tables in the terminal.
+- **The old single-column index on `submissions(widget_id)` was replaced** by a composite `(widget_id, created_at DESC)` index that also serves newest-first lists and date filters.
+
+### Checks the AI ran in its own environment (not my test runs)
+- It broke the tenant filter on purpose in three places (the list and count queries, the single-submission lookup and the per-widget stats). Each time `test_stage_6.sh` failed, for example owner A saw 72 submissions instead of 4.
+- It tried odd inputs: ISO dates with time zone offsets, a plain number as a date, an SQL-injection-style widget id, repeated query parameters, and a huge offset. All returned `400` or an empty page, never a `500`. With the database stopped, the endpoints returned a generic `500` with no SQL text.
+- It checked that every endpoint listed in `capstone.yaml` returns its expected status.
+
+### Where the AI was wrong
+- In its first full run, the test chain from `capstone.yaml` failed on two Stage 5 log checks. The cause was the AI's own test setup: its stand-in for `docker compose logs` was reading an old log file. It fixed the stand-in and re-ran everything successfully. This also meant some of its earlier sandbox passes of those two checks were partly luck. My own runs on Docker (34 of 34, several times) are not affected, because there `docker compose logs` reads the real log.
+- One of its deliberate tenant-leak experiments first failed with a `500` instead of showing the leak, because the edit left a database parameter unused. It redid that experiment correctly (the leak then showed as `200` instead of `404`).
+
+### Known limitations
+- The composite index was added for newest-first lists and date filters, but I have not measured its effect.
+- The submissions list returns each submission's form content exactly as stored.
+- Statistics are computed live from the submissions table on every request; there is no caching.
+- The tenant-isolation proof for submissions uses `curl` calls; there is no browser page on a second origin yet.

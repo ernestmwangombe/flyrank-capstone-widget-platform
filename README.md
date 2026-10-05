@@ -4,8 +4,8 @@ A multi-tenant backend that lets a customer create an embeddable widget, hands t
 
 Built for the FlyRank Internship Backend Track capstone with **Node.js, Express and PostgreSQL**, run with **Docker**. Everything uses free tools and needs no credit card.
 
-> **Project status: Stages 1-5 complete.**
-> Authentication, widget management, embed snippets, versioned and cached widget delivery, the public submission endpoint, and its protection layers (rate limiting, spam control, geo enrichment with a fallback chain, and a safe confirmation side effect) are built and tested. This README describes the project as it stands after Stage 5 and is extended as each new stage is completed.
+> **Project status: Stages 1-6 complete.**
+> Authentication, widget management, embed snippets, versioned and cached widget delivery, the public submission endpoint, its protection layers (rate limiting, spam control, geo enrichment with a fallback chain, and a safe confirmation side effect), and the owner dashboard API (submissions list and analytics) are built and tested. This README describes the project as it stands after Stage 6 and is extended as each new stage is completed.
 
 ---
 
@@ -15,7 +15,7 @@ There are three kinds of people ("actors") and each has its own request path:
 
 | Actor | What they do | Path |
 |-------|--------------|------|
-| **Widget owner** (tenant) | Registers, logs in, creates and manages widgets, copies the embed snippet | Authenticated API (`/api/auth/*`, `/api/widgets/*`) |
+| **Widget owner** (tenant) | Registers, logs in, creates and manages widgets, copies the embed snippet, reads their submissions and statistics | Authenticated API (`/api/auth/*`, `/api/widgets/*`, `/api/dashboard/*`) |
 | **Customer website** | Pastes the snippet; the browser loads the script and the widget's config | Public, cached, CORS-enabled (`/widget.v1.js`, `/api/widgets/:id/config`) |
 | **Website visitor** | Submits the form | Public, CORS-enabled, validated, rate-limited and spam-filtered (`POST /api/embed/submit`) |
 
@@ -37,6 +37,7 @@ flowchart TD
 
     Owner -- "POST /api/auth/register, /login<br/>JWT Bearer token" --> API
     Owner -- "CRUD /api/widgets<br/>(tenant-isolated)" --> API
+    Owner -- "GET /api/dashboard/*<br/>submissions + stats (tenant-isolated)" --> API
     Site -- "GET /widget.v1.js<br/>Cache: 1 year, immutable" --> API
     Site -- "GET /api/widgets/:id/config<br/>CORS *, Cache: 60 s" --> API
     Visitor -- "POST /api/embed/submit<br/>CORS + preflight, rate limited" --> API
@@ -49,6 +50,8 @@ The same request paths as a plain-text sketch:
 
 ```
 Widget Owner --(JWT)--> Widget Management API --> widgets table (tenant_id filter) --> embed snippet
+
+Widget Owner --(JWT)--> Dashboard API --> submissions JOIN widgets (tenant_id filter) --> list, per-widget stats, counts over time, geo breakdown
 
 Customer Site: <script src=".../widget.v1.js?id=1">
    --> GET /widget.v1.js            (public, cached 1 year, versioned URL)
@@ -73,6 +76,11 @@ server.js                              App setup, auth routes, widget CRUD, widg
 db.js                                  PostgreSQL connection pool
 src/routes/submission.js               HTTP layer: POST /api/embed/submit
 src/middleware/validateSubmission.js   Zod validation for submissions
+src/middleware/authenticateTenant.js   JWT login check shared by the widget and dashboard routes
+src/middleware/validateDashboard.js    Zod validation for the dashboard query strings and ids
+src/routes/dashboard.js                HTTP layer: /api/dashboard/*
+src/services/dashboardService.js       Logic layer: widget ownership checks and response shaping
+src/repositories/dashboardRepository.js  Data layer: the tenant-isolated dashboard SQL
 src/middleware/honeypot.js             Spam control: hidden "website" field
 src/middleware/rateLimiter.js          Token-bucket rate limits per IP and per widget
 src/services/submissionService.js      Logic layer: check widget, enrich, store, queue the confirmation
@@ -84,7 +92,7 @@ schema.sql                             Tables, indexes and seed rows (run automa
 docker-compose.yml                     App + PostgreSQL services
 Dockerfile                             Node 20 Alpine image for the app
 capstone.yaml                          Manifest: run, seed, test commands and endpoints
-test_stage_1.sh ... test_stage_5.sh    Integration test scripts, one per stage
+test_stage_1.sh ... test_stage_6.sh    Integration test scripts, one per stage
 ```
 
 ---
@@ -129,7 +137,7 @@ Seeding is built into the first start. On a brand-new database volume PostgreSQL
 - creates the `tenants`, `widgets` and `submissions` tables and their indexes, and
 - inserts demo rows: tenant `1` (`dev@flyrank.ai`) and widget `1` ("Stage 4 Public Form Widget"). The public config and submission tests use widget `1`.
 
-If you update an existing checkout to Stage 5, run the re-seed below once: the `submissions` table gained a `geo` column, and the database only reads `schema.sql` when its volume is new.
+If you update an existing checkout, run the re-seed below once: Stage 5 added a `geo` column to `submissions` and Stage 6 replaced an index, and the database only reads `schema.sql` automatically when its volume is new. Either `docker compose down -v` then `docker compose up --build`, or just re-run the seed command from `capstone.yaml` against the running stack (it drops and recreates the tables and demo rows).
 
 To **re-seed from scratch** (this deletes all data in the database volume):
 
@@ -253,6 +261,42 @@ The embed snippet returned by the management API looks like:
 | `429` | Too many requests. Body: `{ error, scope: "ip" or "widget", retry_after_seconds }`, plus a `Retry-After` header |
 | `500` | Unexpected server error (generic message; details are logged server-side only) |
 
+## Owner dashboard API (authenticated)
+
+The owner reads the submissions that arrived on their widgets, and basic analytics. Send `Authorization: Bearer <token>` (from `/api/auth/login`). Every route is also available under `/api/v1/admin/dashboard`. The tenant always comes from the verified token, and every query joins `submissions` to `widgets` and filters on the widget's `tenant_id`, so an owner can never read another owner's data. Asking for another owner's widget or submission returns `404`, exactly like one that does not exist.
+
+| Method | Endpoint | Query parameters | Success |
+|--------|----------|------------------|---------|
+| `GET` | `/api/dashboard/submissions` | `widget_id`, `from`, `to`, `limit` (1-100, default 20), `offset` (default 0) | `200` `{ data: [ { id, widget_id, widget_name, payload, metadata, geo, created_at } ], pagination: { total, limit, offset } }`, newest first |
+| `GET` | `/api/dashboard/submissions/:id` | none | `200` one submission, `404` if it is not the caller's |
+| `GET` | `/api/dashboard/stats/widgets` | none | `200` `{ data: [ { widget_id, name, type, total_submissions, last_24h, last_7d, enriched_submissions, last_submission_at } ] }` for every widget the owner has, busiest first (widgets with no submissions show zeros) |
+| `GET` | `/api/dashboard/stats/over-time` | `days` (1-365, default 30), `widget_id` | `200` `{ days, from, to, widget_id, total, data: [ { date, count } ] }` with one entry per UTC day, including days with zero submissions |
+| `GET` | `/api/dashboard/stats/geo` | `days` (1-365, default all time), `widget_id` | `200` `{ total, widget_id, days, data: [ { country, country_code, count, percent } ] }`, largest first; submissions that could not be located are grouped as `Unknown` |
+
+Notes:
+- `from` and `to` are ISO dates or date-times such as `2026-10-04` or `2026-10-04T10:00:00Z`. `from` is inclusive and `to` is exclusive, except that a bare `to` date includes that whole day. All dates and day buckets are UTC.
+- Errors: `401` missing, invalid, tampered or expired token; `400` invalid query value (`{ error: "Validation Failed", details: [{ field, message }] }`); `404` unknown or foreign widget or submission; `500` generic message (details only in the server log).
+
+**Try it**
+
+```bash
+TOKEN=$(curl -s -X POST http://localhost:3000/api/auth/login -H "Content-Type: application/json" \
+  -d '{"email":"demo@example.com","password":"password123"}' | jq -r '.token')
+
+# The newest 5 submissions as a table
+curl -s "http://localhost:3000/api/dashboard/submissions?limit=5" -H "Authorization: Bearer $TOKEN" \
+  | jq -r '.data[] | [.id, .widget_name, (.geo.country // "Unknown"), .created_at] | @tsv'
+
+# Per-widget statistics
+curl -s http://localhost:3000/api/dashboard/stats/widgets -H "Authorization: Bearer $TOKEN" | jq
+
+# Submissions per day for the last 7 days
+curl -s "http://localhost:3000/api/dashboard/stats/over-time?days=7" -H "Authorization: Bearer $TOKEN" | jq -r '.data[] | [.date, .count] | @tsv'
+
+# Where visitors come from
+curl -s http://localhost:3000/api/dashboard/stats/geo -H "Authorization: Bearer $TOKEN" | jq
+```
+
 ## Protection, enrichment and safe side effects
 
 Three layers sit between "request arrives" and "row stored" on `POST /api/embed/submit`. Order of the pipeline: per-IP rate limit, JSON body parser, validation, honeypot, per-widget rate limit, widget check, geo enrichment, storage, confirmation email.
@@ -317,6 +361,7 @@ bash test_stage_2.sh   # embed snippet generation
 bash test_stage_3.sh   # versioned bundle, cache headers, config endpoint, loader safety
 bash test_stage_4.sh   # CORS preflight, submission, validation, 404, oversized payload, malformed JSON, JSON 404
 bash test_stage_5.sh   # honeypot, geo fallback chain, email failure, per-IP and per-widget rate limits
+bash test_stage_6.sh   # dashboard login, list and paging, filters, tenant isolation, analytics
 ```
 
 | Script | Covers |
@@ -324,6 +369,7 @@ bash test_stage_5.sh   # honeypot, geo fallback chain, email failure, per-IP and
 | `test_stage_1.sh` | Register, duplicate/short-password rejection, login, wrong password; no header, made-up Bearer string, `x-tenant-id` header and tampered token all return `401`; create/list/update/delete widget; tenant B gets `404` when reading, updating or deleting tenant A's widget and the widget is left unchanged |
 | `test_stage_2.sh` | `embed_snippet` present on create and fetch, bound to the right widget id and versioned URL |
 | `test_stage_3.sh` | `/widget.v1.js` status, content type and immutable cache; config endpoint headers; `400`/`404` handling; unknown version `404`; legacy URL short cache; snippet uses the versioned URL; loader sets widget text with `textContent`, never `innerHTML` |
+| `test_stage_6.sh` | The dashboard rejects missing, made-up and tampered tokens; owner A's list returns exactly their submissions, newest first, with paging, widget and date filters; bad query values return `400`; owner B cannot list, fetch by id, or filter by owner A's data (`404`) and sees only their own; per-widget stats, counts over time (zero-count days included) and the geo breakdown return the expected numbers and percentages; a new public submission appears at the top of its owner's dashboard and stays hidden from the other owner |
 | `test_stage_5.sh` | Honeypot spam is dropped and not stored while a normal submission is stored; geo provider A answers, then provider B when A is down, then the submission is stored without geo when both are down; a working confirmation email is sent and a failing one still returns `201`, stores the row and raises an `ALERT`; a burst from one visitor gets `429` while another visitor and `/health` are still served and the same visitor recovers after 2 seconds; a flood of 60 different visitors on one widget gets `429` while another widget is still served |
 | `test_stage_4.sh` | Preflight `204`, valid submission `201`, missing data `400`, unknown widget `404`, oversized body `413` as JSON, malformed JSON `400` as JSON, unknown route `404` as JSON |
 
@@ -338,6 +384,7 @@ Raw outputs are pasted in [`EVIDENCE.md`](EVIDENCE.md). Design decisions, where 
 | **1. Widget management API** | Tenant registration and login, signed JWT authentication, full widget CRUD, tenant isolation on every query | `test_stage_1.sh` |
 | **2. Embed snippet generation** | Every widget response includes a ready-to-paste `<script>` embed snippet | `test_stage_2.sh` |
 | **3. Fast, cached widget delivery** | Versioned widget bundle (`/widget.v1.js`, cached for a year), public config endpoint (cached for 60 s), CORS, `no-store` on error responses, loader that renders widget text as plain text | `test_stage_3.sh` |
+| **6. Owner dashboard API** | Authenticated, tenant-isolated submissions list with paging and filters, a single-submission lookup, per-widget stats, counts over time and a geo breakdown | `test_stage_6.sh` |
 | **5. Protection, enrichment and safe side effects** | Per-IP and per-widget rate limiting (`429`), honeypot spam control, geo enrichment with an A-then-B fallback chain that still stores the submission when every provider is down, background confirmation email with retries and a failure alert that never breaks the submission | `test_stage_5.sh` |
 | **4. Public submission endpoint** | Cross-origin submissions with CORS and preflight, Zod input validation, widget existence check, storage in PostgreSQL, oversized-payload rejection, JSON error responses (global error handler) | `test_stage_4.sh` |
 
@@ -356,4 +403,5 @@ Honest notes on the current state of the project:
 - **Geo lookups:** the default `GEO_MODE=mock` returns fixed fake locations. With `GEO_MODE=real` only public IP addresses can be located, and the free provider tiers have request quotas.
 - **The confirmation email is simulated** (a masked log line); no real mail is sent.
 - **`TEST_CONTROLS=true` is for development only.** It lets any caller force provider or email failures for their own request and pretend to be another IP, so it must be `false` in production.
+- **Dashboard times are UTC.** Counts over time are grouped by UTC day, and the submissions list returns each submission's form content exactly as it was stored.
 - **Intended for local development** with Docker Compose.
