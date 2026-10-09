@@ -8,6 +8,8 @@ version: "1.0"
 name: flyrank-capstone-widget-platform
 # Where the running API answers; the endpoint paths below are relative to this URL
 base_url: http://localhost:3000
+# The customer test site: a plain HTML page on a DIFFERENT origin (second port) that embeds the widget; open it in a browser to see the widget render and submit
+customer_site_url: http://localhost:5500
 
 # ONE command that builds and boots the whole system (API + PostgreSQL); the first start also creates the tables and demo rows from schema.sql
 run: "docker compose up --build"
@@ -15,8 +17,8 @@ run: "docker compose up --build"
 # Seed step: pipes schema.sql into psql inside the running PostgreSQL container (drops and recreates the tables, then inserts demo tenant 1 and widget 1); uses stdin so no /path argument is mangled by Git Bash on Windows
 seed: "docker compose exec -T postgres psql -U postgres -d flyrank_db < schema.sql"
 
-# Optional test command: runs the six stage scripts in order and stops at the first failure (needs bash, curl, jq and the docker compose CLI, with the system already running)
-test: "bash test_stage_1.sh && bash test_stage_2.sh && bash test_stage_3.sh && bash test_stage_4.sh && bash test_stage_5.sh && bash test_stage_6.sh"
+# Optional test command: runs the seven stage scripts in order and stops at the first failure (needs bash, curl, jq and the docker compose CLI, with the system already running)
+test: "bash test_stage_1.sh && bash test_stage_2.sh && bash test_stage_3.sh && bash test_stage_4.sh && bash test_stage_5.sh && bash test_stage_6.sh && bash test_stage_7.sh"
 
 # Endpoints the evaluator can probe (auth: none = public, bearer = needs the JWT returned by login; expect = the success status)
 endpoints:
@@ -59,7 +61,7 @@ endpoints:
     expect: 200                          # Success status
 
   # ---- Public widget delivery (Stage 3; CORS enabled, cached) ----
-  - path: /widget.v1.js?id=1             # Versioned loader script, cached for one year
+  - path: /widget.v2.js?id=1             # Current versioned loader (form + submit), cached for one year (version 1 is still served for old embeds)
     method: GET                          # HTTP method
     auth: none                           # No token needed
     expect: 200                          # Success status

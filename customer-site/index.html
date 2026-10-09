@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<!-- ============================================================================
+     customer-site/index.html
+     A plain HTML page that plays the part of a CUSTOMER'S website. It is served from http://localhost:5500,
+     which is a different ORIGIN from the API (http://localhost:3000), so everything the widget does here is a real cross-origin request.
+     Open it, fill the form in the corner, press the button, then look at the owner dashboard.
+     Use ?widget=<id> in the address to show a different widget, for example http://localhost:5500/?widget=7
+     ============================================================================ -->
+<html lang="en">
+<head>
+  <!-- Character set and mobile scaling -->
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- The browser tab title -->
+  <title>Acme Coffee Roasters (customer test site)</title>
+  <!-- An empty icon, so browsers stop asking this server for /favicon.ico (it would only add a 404 line to the log) -->
+  <link rel="icon" href="data:,">
+  <!-- Page styling, kept small and inline on purpose -->
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 760px; margin: 32px auto; padding: 0 16px 120px; color: #0f172a; line-height: 1.5; }
+    h1 { margin-bottom: 4px; }
+    .muted { color: #475569; }
+    .box { border: 1px solid #cbd5e1; border-radius: 8px; padding: 12px 16px; margin: 16px 0; background: #f8fafc; }
+    code, pre { background: #e2e8f0; padding: 2px 6px; border-radius: 4px; font-size: 13px; }
+    pre { padding: 10px; overflow-x: auto; }
+    .ok { color: #15803d; font-weight: bold; }
+    .bad { color: #b91c1c; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <!-- A pretend customer website -->
+  <h1>Acme Coffee Roasters</h1>
+  <p class="muted">A pretend customer website. The contact form in the bottom-right corner is not part of this page: it is the widget, loaded from the API on another origin.</p>
+
+  <!-- Shows the two origins so it is obvious the request crosses origins -->
+  <div class="box">
+    <strong>Origin check</strong>
+    <p>This page is served from: <code id="page-origin"></code></p>
+    <p>The widget and its API are served from: <code id="api-origin"></code></p>
+    <p id="origin-verdict"></p>
+  </div>
+
+  <!-- Filled in by the script below only when the widget has not appeared after a few seconds -->
+  <p id="widget-missing"></p>
+
+  <!-- Shows the one line a customer pastes to install the widget -->
+  <div class="box">
+    <strong>The one-line embed snippet used on this page</strong>
+    <pre id="snippet"></pre>
+  </div>
+
+  <!-- The widget reports every submission result here -->
+  <div class="box">
+    <strong>Last submission result</strong>
+    <p id="result" class="muted">Nothing submitted yet.</p>
+  </div>
+
+  <script>
+    // The address of the API (a different origin from this page)
+    var API_ORIGIN = 'http://localhost:3000';
+    // Read the widget id from ?widget=<id>; use the seeded demo widget 1 when it is missing or not plain digits
+    var requested = new URLSearchParams(window.location.search).get('widget');
+    // Validate it so nothing but digits can ever end up in the script address
+    var widgetId = /^\d+$/.test(requested || '') ? requested : '1';
+    // The exact line a customer would paste into their site
+    var snippetText = '<script src="' + API_ORIGIN + '/widget.v2.js?id=' + widgetId + '" defer></' + 'script>';
+    // Show the snippet as plain text
+    document.getElementById('snippet').textContent = snippetText;
+    // Show this page's origin
+    document.getElementById('page-origin').textContent = window.location.origin;
+    // Show the API origin
+    document.getElementById('api-origin').textContent = API_ORIGIN;
+    // Compare the two origins and say so
+    var verdict = document.getElementById('origin-verdict');
+    // Different origin means the browser enforces CORS for the widget's requests
+    if (window.location.origin !== API_ORIGIN) {
+      // Explain what that means
+      verdict.textContent = 'These are different origins, so the browser applies CORS rules to every request the widget makes.';
+      // Green
+      verdict.className = 'ok';
+    } else {
+      // Explain the problem
+      verdict.textContent = 'Same origin: open this page from another port (see the README) to test CORS.';
+      // Red
+      verdict.className = 'bad';
+    }
+    // Listen for the result event that the widget fires after every submit attempt
+    window.addEventListener('flyrank:submit-result', function (event) {
+      // The details sent by the widget
+      var d = event.detail;
+      // Build a human-readable line
+      var text = 'HTTP ' + d.status + (d.status === 201 ? ' (stored' + (d.submission_id ? ' as submission #' + d.submission_id : '') + ')' : (d.status === 0 ? ' (request failed or was blocked by CORS)' : ' (not stored)')) + ' at ' + new Date().toLocaleTimeString();
+      // Show it
+      var out = document.getElementById('result');
+      // As plain text
+      out.textContent = text;
+      // Green for success, red otherwise
+      out.className = d.status === 201 ? 'ok' : 'bad';
+    });
+    // Install the widget exactly like a customer would: add the script tag (the widget draws itself in the corner)
+    var tag = document.createElement('script');
+    // The script address with the widget id
+    tag.src = API_ORIGIN + '/widget.v2.js?id=' + widgetId;
+    // Do not block page parsing, the same as the snippet above
+    tag.defer = true;
+    // Add it to the page
+    document.body.appendChild(tag);
+    // After 4 seconds, check that the widget really appeared. During development the usual reason it did not is that the API container
+    // is still starting (the customer site is up within seconds, the API needs up to a minute), so say so instead of showing nothing.
+    setTimeout(function () {
+      // The widget draws a container with this id; if it exists there is nothing to explain
+      if (document.getElementById('flyrank-widget-' + widgetId)) {
+        // Stop here
+        return;
+      }
+      // The place where the explanation is shown
+      var note = document.getElementById('widget-missing');
+      // Ask the API whether it is up (its /health endpoint allows any origin)
+      fetch(API_ORIGIN + '/health').then(function (response) {
+        // Up, or up but unhappy
+        return response.ok ? 'reachable' : 'answering with an error';
+      }, function () {
+        // The request failed outright: the API is not running (yet) or the browser blocked it
+        return 'not reachable';
+      }).then(function (state) {
+        // Build the explanation as plain text
+        note.textContent = 'The widget has not appeared. The API at ' + API_ORIGIN + ' is ' + state + '. ' +
+          (state === 'reachable'
+            ? 'Open the browser console and look for a message starting with "FlyRank Widget" (a wrong ?widget= id gives a 404).'
+            : 'Wait for "Server running successfully on port 3000" in the docker output, then reload this page.');
+        // Show it in red
+        note.className = 'bad';
+      });
+    }, 4000);
+  </script>
+</body>
+</html>

@@ -34,6 +34,9 @@ import { authenticateTenant } from './src/middleware/authenticateTenant.js';
 // Import the Stage 6 owner dashboard router
 import dashboardRoutes from './src/routes/dashboard.js';
 
+// Import the helper that reads and prepares the widget loader source files (Stage 7)
+import { loadBundleSource } from './src/widget/bundleLoader.js';
+
 // Load environment variables into process.env
 dotenv.config();
 
@@ -57,8 +60,9 @@ const BCRYPT_ROUNDS = 10;
 // FIX: pre-computed hash used to keep login timing similar when the email does not exist
 const DUMMY_HASH = bcrypt.hashSync('not-a-real-password', BCRYPT_ROUNDS);
 
-// FIX (Stage 3): current widget bundle version; change WIDGET_VERSION in .env (or edit the fallback '1') on each release so the bundle URL changes
-const WIDGET_VERSION = /^\d+$/.test(process.env.WIDGET_VERSION || '') ? process.env.WIDGET_VERSION : '1';
+// FIX (Stage 3): current widget bundle version; change WIDGET_VERSION in .env (or edit the fallback) on each release so the bundle URL changes
+// FIX (Stage 7): the current version is now '2' (the loader gained the form and the submit logic). Version 1 is still served so old embeds keep working.
+const WIDGET_VERSION = /^\d+$/.test(process.env.WIDGET_VERSION || '') ? process.env.WIDGET_VERSION : '2';
 
 // Initialize Express application instance
 const app = express();
@@ -76,7 +80,9 @@ app.use(cors({
   // FIX: x-tenant-id removed from the allowed headers because tenant identity now comes only from the signed token
   allowedHeaders: ['Content-Type', 'Authorization'],
   // FIX (Stage 5): let browser code on other origins read the Retry-After header that comes with a 429 response
-  exposedHeaders: ['Retry-After']
+  exposedHeaders: ['Retry-After'],
+  // FIX (Stage 7): browsers may remember the answer to the CORS preflight (OPTIONS) request for 10 minutes, so each visitor's second submission skips it
+  maxAge: 600
 }));
 
 // FIX (Stage 5): per-IP rate limit for the whole public /api/embed path.
@@ -651,13 +657,32 @@ const buildWidgetScript = (baseUrl) => {
   return widgetScript.trim();
 };
 
+// FIX (Stage 7): registry of every published loader version. A published version never changes, so it can be cached forever.
+// A new release adds a new entry here (and a new source file) instead of editing an old one.
+//   version 1 = the original display-only card (kept exactly as it was; it needs the public base URL inserted)
+//   version 2 = the form + honeypot + cross-origin submit loader, read once from src/widget/widget.v2.js (it finds the API address from its own script URL)
+const WIDGET_V2_SOURCE = loadBundleSource('widget.v2.js');
+// Map from version number (as text) to a function that returns that version's JavaScript for a given request
+const WIDGET_BUNDLES = {
+  '1': (req) => buildWidgetScript(getBaseUrl(req)),
+  '2': () => WIDGET_V2_SOURCE
+};
+
+// FIX (Stage 7): fail fast if .env asks for a version that has no bundle, instead of handing out embed snippets that would all return 404
+if (!Object.prototype.hasOwnProperty.call(WIDGET_BUNDLES, WIDGET_VERSION)) {
+  // Explain exactly what is wrong and what the choices are
+  console.error(`[CONFIG ERROR] WIDGET_VERSION=${WIDGET_VERSION} has no bundle. Available versions: ${Object.keys(WIDGET_BUNDLES).join(', ')}. Fix it in .env.`);
+  // Stop the server with a failure code
+  process.exit(1);
+}
+
 // FIX: versioned bundle route; the regex matches /widget.v1.js, /widget.v2.js and so on, and captures the number
 app.get(/^\/widget\.v(\d+)\.js$/, (req, res) => {
   // Read the version number captured from the URL
   const requestedVersion = req.params[0];
 
-  // Only the current version exists; anything else is a 404 that must not be cached
-  if (requestedVersion !== WIDGET_VERSION) {
+  // FIX (Stage 7): every published version is served (old embeds keep working); only unknown versions get a 404 that must not be cached
+  if (!Object.prototype.hasOwnProperty.call(WIDGET_BUNDLES, requestedVersion)) {
     // Tell browsers and proxies never to store this error response
     res.setHeader('Cache-Control', 'no-store');
     // Respond with a JSON 404 that names the version that is available
@@ -671,8 +696,8 @@ app.get(/^\/widget\.v(\d+)\.js$/, (req, res) => {
   // Cache for one year and mark as immutable; safe because the URL changes whenever the code does
   res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
 
-  // Send the loader script built for this server's public base URL
-  return res.send(buildWidgetScript(getBaseUrl(req)));
+  // Send the requested version's loader script
+  return res.send(WIDGET_BUNDLES[requestedVersion](req));
 });
 
 // FIX: the old unversioned URL still works so existing embed snippets keep running, but it is cached only briefly
@@ -684,8 +709,8 @@ app.get('/widget.js', (req, res) => {
   // Short cache (60 seconds) and NOT immutable, so a new release reaches browsers quickly through this URL
   res.setHeader('Cache-Control', 'public, max-age=60');
 
-  // Send the same loader script as the versioned route
-  return res.send(buildWidgetScript(getBaseUrl(req)));
+  // FIX (Stage 7): the unversioned URL always serves the CURRENT version (short cache), so old snippets pick up new releases within a minute
+  return res.send(WIDGET_BUNDLES[WIDGET_VERSION](req));
 });
 
 app.get('/api/widgets/:id/config', async (req, res) => {

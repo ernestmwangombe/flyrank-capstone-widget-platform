@@ -37,12 +37,22 @@ CREATE TABLE submissions (
 
 -- Seed default test tenant record for local development and test environment execution
 INSERT INTO tenants (id, email, password_hash, company_name)
-VALUES (1, 'dev@flyrank.ai', '$2b$10$e83...mockhash', 'FlyRank Test Org')
+VALUES (1, 'dev@flyrank.ai', '$2a$10$3Xc09bLfU.f7.fG8Ia9EhuEenCSnk/ZlYfVIc/4BTyqRRHfA9NcSu', 'FlyRank Test Org')   -- FIX (Stage 7): DEMO owner for local development: log in as dev@flyrank.ai with password DemoPass123! (the value stored here is only the bcrypt hash)
 ON CONFLICT (id) DO NOTHING;                                  -- Prevent execution errors on repeated schema seeding runs
 
 -- Seed default test widget record (ID = 1) required for Stage 4 verification tests
 INSERT INTO widgets (id, tenant_id, name, type, config)
-VALUES (1, 1, 'Stage 4 Public Form Widget', 'lead_capture', '{"fields": ["email", "feedback"]}'::jsonb)
+VALUES (1, 1, 'Stage 4 Public Form Widget', 'lead_capture', '{
+  "title": "Stay in touch",
+  "description": "Leave your details and we will get back to you.",
+  "buttonText": "Send",
+  "successMessage": "Thank you! We received your message.",
+  "fields": [
+    { "name": "name", "label": "Your name", "type": "text", "required": false },
+    { "name": "email", "label": "Email", "type": "email", "required": true },
+    { "name": "feedback", "label": "Message", "type": "textarea", "required": false }
+  ]
+}'::jsonb)   -- FIX (Stage 7): richer config so the second-origin test page shows a real form (the loader also accepts the older ["email","feedback"] shorthand)
 ON CONFLICT (id) DO NOTHING;                                  -- Prevent execution errors on repeated schema seeding runs
 
 -- FIX: the seed rows above insert explicit ids (1), which does NOT advance the SERIAL counters.
