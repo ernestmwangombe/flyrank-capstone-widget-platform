@@ -4,8 +4,8 @@ A multi-tenant backend that lets a customer create an embeddable widget, hands t
 
 Built for the FlyRank Internship Backend Track capstone with **Node.js, Express and PostgreSQL**, run with **Docker**. Everything uses free tools and needs no credit card.
 
-> **Project status: Stages 1-6 complete.**
-> Authentication, widget management, embed snippets, versioned and cached widget delivery, the public submission endpoint, its protection layers (rate limiting, spam control, geo enrichment with a fallback chain, and a safe confirmation side effect), and the owner dashboard API (submissions list and analytics) are built and tested. This README describes the project as it stands after Stage 6 and is extended as each new stage is completed.
+> **Project status: Stages 1-7 complete.**
+> Authentication, widget management, embed snippets, versioned and cached widget delivery, the public submission endpoint, its protection layers (rate limiting, spam control, geo enrichment with a fallback chain, and a safe confirmation side effect), the owner dashboard API (submissions list and analytics), and a customer test site on a second origin where the widget renders as a form and submits across origins are built and tested. This README describes the project as it stands after Stage 7 and is extended as each new stage is completed.
 
 ---
 
@@ -16,7 +16,7 @@ There are three kinds of people ("actors") and each has its own request path:
 | Actor | What they do | Path |
 |-------|--------------|------|
 | **Widget owner** (tenant) | Registers, logs in, creates and manages widgets, copies the embed snippet, reads their submissions and statistics | Authenticated API (`/api/auth/*`, `/api/widgets/*`, `/api/dashboard/*`) |
-| **Customer website** | Pastes the snippet; the browser loads the script and the widget's config | Public, cached, CORS-enabled (`/widget.v1.js`, `/api/widgets/:id/config`) |
+| **Customer website** | Pastes the snippet; the browser loads the script, draws the form from the widget's config and submits it across origins | Public, cached, CORS-enabled (`/widget.v2.js`, `/api/widgets/:id/config`) |
 | **Website visitor** | Submits the form | Public, CORS-enabled, validated, rate-limited and spam-filtered (`POST /api/embed/submit`) |
 
 Because the public endpoints receive requests straight from browsers the server does not control, input is never trusted: every field is validated before it reaches the database, floods and bots are turned away before they cost anything, optional extras (location lookup, confirmation email) can fail without breaking a submission, and every tenant query is filtered by the tenant id taken from a signed token.
@@ -38,7 +38,7 @@ flowchart TD
     Owner -- "POST /api/auth/register, /login<br/>JWT Bearer token" --> API
     Owner -- "CRUD /api/widgets<br/>(tenant-isolated)" --> API
     Owner -- "GET /api/dashboard/*<br/>submissions + stats (tenant-isolated)" --> API
-    Site -- "GET /widget.v1.js<br/>Cache: 1 year, immutable" --> API
+    Site -- "GET /widget.v2.js<br/>Cache: 1 year, immutable" --> API
     Site -- "GET /api/widgets/:id/config<br/>CORS *, Cache: 60 s" --> API
     Visitor -- "POST /api/embed/submit<br/>CORS + preflight, rate limited" --> API
     API -- "SQL (parameterised)" --> DB
@@ -53,10 +53,10 @@ Widget Owner --(JWT)--> Widget Management API --> widgets table (tenant_id filte
 
 Widget Owner --(JWT)--> Dashboard API --> submissions JOIN widgets (tenant_id filter) --> list, per-widget stats, counts over time, geo breakdown
 
-Customer Site: <script src=".../widget.v1.js?id=1">
-   --> GET /widget.v1.js            (public, cached 1 year, versioned URL)
+Customer Site: <script src=".../widget.v2.js?id=1">
+   --> GET /widget.v2.js            (public, cached 1 year, versioned URL)
    --> GET /api/widgets/:id/config  (public, cached 60 s, CORS *)
-   --> render widget
+   --> render the form, then on submit: OPTIONS preflight + POST /api/embed/submit (see Visitor path)
 
 Visitor --> POST /api/embed/submit  (public, CORS)
    | rate limit per IP            -> flood? 429 (before the body is even parsed)
@@ -92,7 +92,12 @@ schema.sql                             Tables, indexes and seed rows (run automa
 docker-compose.yml                     App + PostgreSQL services
 Dockerfile                             Node 20 Alpine image for the app
 capstone.yaml                          Manifest: run, seed, test commands and endpoints
-test_stage_1.sh ... test_stage_6.sh    Integration test scripts, one per stage
+src/widget/widget.v2.js                The widget loader (version 2) that runs on customer sites
+src/widget/bundleLoader.js             Reads a loader file and strips its comments before it is served
+customer-site/index.html               Plain HTML test page for the second origin (served by nginx on port 5500)
+docs/DESIGN.md                         One-page design: problem, data model, API surface, layers, pipeline, one explicit non-goal
+docs/evidence/                         Browser screenshots referenced from EVIDENCE.md
+test_stage_1.sh ... test_stage_7.sh    Integration test scripts, one per stage
 ```
 
 ---
@@ -135,7 +140,7 @@ The API is now at `http://localhost:3000`. Check it with `curl http://localhost:
 Seeding is built into the first start. On a brand-new database volume PostgreSQL runs `schema.sql` automatically, which:
 
 - creates the `tenants`, `widgets` and `submissions` tables and their indexes, and
-- inserts demo rows: tenant `1` (`dev@flyrank.ai`) and widget `1` ("Stage 4 Public Form Widget"). The public config and submission tests use widget `1`.
+- inserts demo rows: a demo owner, tenant `1` (`dev@flyrank.ai`, password `DemoPass123!`, **for local development only**), and widget `1` ("Stage 4 Public Form Widget", configured with a name, an email and a message field). The public config and submission tests and the customer test site use widget `1`.
 
 If you update an existing checkout, run the re-seed below once: Stage 5 added a `geo` column to `submissions` and Stage 6 replaced an index, and the database only reads `schema.sql` automatically when its volume is new. Either `docker compose down -v` then `docker compose up --build`, or just re-run the seed command from `capstone.yaml` against the running stack (it drops and recreates the tables and demo rows).
 
@@ -146,7 +151,7 @@ docker compose down -v
 docker compose up --build -V
 ```
 
-The seeded tenant has a placeholder password hash, so you cannot log in as it. To get your own demo data, register a tenant and create a widget through the API (see the examples below).
+You can log in as the demo owner (`dev@flyrank.ai` / `DemoPass123!`) to see the submissions that arrive on widget `1` in the dashboard API. To get your own data, register a tenant and create a widget through the API (see the examples below).
 
 ### 4. Try it
 
@@ -180,7 +185,7 @@ curl -X POST http://localhost:3000/api/embed/submit \
 | `PORT` | HTTP port the API listens on | `3000` |
 | `JWT_SECRET` | Secret used to sign login tokens (**required**) | a long random string |
 | `JWT_EXPIRES_IN` | How long a login token stays valid (optional) | `1h` |
-| `WIDGET_VERSION` | Current widget bundle version number (optional, default `1`) | `1` |
+| `WIDGET_VERSION` | Bundle version used in new embed snippets (optional, default `2`; versions `1` and `2` exist). If your `.env` still says `1` from an earlier checkout, change it to `2`. | `2` |
 | `BASE_URL` | Public base URL used in embed snippets (optional, defaults to the request host) | `http://localhost:3000` |
 | `TEST_CONTROLS` | Development-only test switches (see [Test controls](#test-controls-development-only)). **Must be `false` in production.** | `true` |
 | `GEO_MODE` | `mock` = built-in fake geo providers (repeatable), `real` = ip-api.com then ipapi.co | `mock` |
@@ -225,14 +230,14 @@ Common errors: `401` missing, invalid, tampered or expired token; `400` invalid 
 
 | Method | Endpoint | Cache-Control | Description |
 |--------|----------|---------------|-------------|
-| `GET` | `/widget.v1.js?id=<widget id>` | `public, max-age=31536000, immutable` | Versioned loader script. The version in the URL comes from `WIDGET_VERSION`; a new release gets a new URL, so browsers can cache forever without serving stale code. An unknown version returns `404` with `no-store`. |
+| `GET` | `/widget.v2.js?id=<widget id>` | `public, max-age=31536000, immutable` | Current versioned loader script (version 2: draws the form and submits it). The version in the URL is the release; a new release gets a new URL, so browsers can cache forever without serving stale code. Published versions never change and stay available: `/widget.v1.js` (the original display-only card) is still served for old embeds. An unknown version returns `404` with `no-store`. |
 | `GET` | `/widget.js?id=<widget id>` | `public, max-age=60` | Legacy unversioned URL kept so older snippets keep working; cached only briefly. |
 | `GET` | `/api/widgets/:id/config` | `public, max-age=60` | Widget configuration JSON. `400` for a non-numeric id and `404` for an unknown widget, both with `no-store`. |
 
 The embed snippet returned by the management API looks like:
 
 ```html
-<script src="http://localhost:3000/widget.v1.js?id=1" defer></script>
+<script src="http://localhost:3000/widget.v2.js?id=1" defer></script>
 ```
 
 ### Public submission (no auth, CORS enabled)
@@ -260,6 +265,36 @@ The embed snippet returned by the management API looks like:
 | `413` | Body larger than the 10 KB limit (JSON error) |
 | `429` | Too many requests. Body: `{ error, scope: "ip" or "widget", retry_after_seconds }`, plus a `Retry-After` header |
 | `500` | Unexpected server error (generic message; details are logged server-side only) |
+
+## Customer test site (second origin)
+
+`docker compose up --build` also starts a tiny nginx container that serves `customer-site/index.html` on **http://localhost:5500**. It plays the part of a customer's website: a plain HTML page on a **different origin** from the API (`http://localhost:3000`), so the browser applies CORS rules to everything the widget does.
+
+1. Wait for `Server running successfully on port 3000` in the `docker compose up` output (the customer site is ready within seconds, but the API container can need up to a minute on a start), then open **http://localhost:5500** in a browser. If the widget has not appeared after 4 seconds, the page says so and tells you whether the API is reachable; reload once it is. The widget appears in the bottom-right corner as a small form (title, description and fields come from the widget's config). The page also shows both origins side by side and the one-line embed snippet it uses.
+2. Fill in the form (the email field is required) and press the button. The widget replaces the form with a thank-you message, and the page prints `HTTP 201 (stored as submission #N)`.
+3. Log in as the demo owner and look at the submission in the dashboard API:
+
+```bash
+TOKEN=$(curl -s -X POST http://localhost:3000/api/auth/login -H "Content-Type: application/json" \
+  -d '{"email":"dev@flyrank.ai","password":"DemoPass123!"}' | jq -r '.token')
+curl -s "http://localhost:3000/api/dashboard/submissions?widget_id=1&limit=1" -H "Authorization: Bearer $TOKEN" | jq
+```
+
+To show your own widget, create it through the API and open `http://localhost:5500/?widget=<its id>`.
+
+**What the browser does on this page.** The widget sends a JSON `POST` to the API. Because the page and the API are on different origins and the body is JSON, the browser first sends an automatic `OPTIONS` preflight; the API answers `204` with `Access-Control-Allow-Origin: *`, `Access-Control-Allow-Methods` including `POST` and `Access-Control-Allow-Headers` including `Content-Type`, and caches the answer for 10 minutes (`Access-Control-Max-Age: 600`). The real response, including error responses such as `400` and `429`, also carries `Access-Control-Allow-Origin`, and `Retry-After` is exposed, so the page's code can read them. You can watch this in the browser's developer tools (Network tab).
+
+**Widget form config.** The widget's `config` (set when creating or updating it) controls what is drawn:
+
+| Key | Meaning |
+|-----|---------|
+| `title`, `description` | Heading and text above the form |
+| `buttonText`, `successMessage` | Button label and the message shown after a successful submit |
+| `fields` | Up to 10 fields, each `{ "name": "email", "label": "Email", "type": "text" \| "email" \| "textarea", "required": true }`. A plain string such as `"email"` is shorthand for a field with that name. Names must start with a letter and use letters, digits and underscores; `website` is reserved for the honeypot. With no usable fields the widget shows a single required email field. |
+
+All text from the config is shown as plain text (never as HTML). The loader adds a hidden `website` field that people never see; bots that fill it are dropped silently (see [Protection](#protection-enrichment-and-safe-side-effects)). The server checks the submission's structure, size and types; it does not enforce a widget's `required` flags, which the browser form applies.
+
+**Bundle versions.** Published loader versions never change, so they can be cached for a year: `/widget.v1.js` is the original card without a form and is kept for old embeds, and `/widget.v2.js` is the current loader. The unversioned `/widget.js` always serves the current version with a 60 second cache. The comments in the loader's source file (`src/widget/widget.v2.js`) are removed before it is served, which keeps the public file small.
 
 ## Owner dashboard API (authenticated)
 
@@ -362,13 +397,15 @@ bash test_stage_3.sh   # versioned bundle, cache headers, config endpoint, loade
 bash test_stage_4.sh   # CORS preflight, submission, validation, 404, oversized payload, malformed JSON, JSON 404
 bash test_stage_5.sh   # honeypot, geo fallback chain, email failure, per-IP and per-widget rate limits
 bash test_stage_6.sh   # dashboard login, list and paging, filters, tenant isolation, analytics
+bash test_stage_7.sh   # second-origin customer site, widget bundle v2, CORS preflight and responses, submission visible in the dashboard
 ```
 
 | Script | Covers |
 |--------|--------|
 | `test_stage_1.sh` | Register, duplicate/short-password rejection, login, wrong password; no header, made-up Bearer string, `x-tenant-id` header and tampered token all return `401`; create/list/update/delete widget; tenant B gets `404` when reading, updating or deleting tenant A's widget and the widget is left unchanged |
 | `test_stage_2.sh` | `embed_snippet` present on create and fetch, bound to the right widget id and versioned URL |
-| `test_stage_3.sh` | `/widget.v1.js` status, content type and immutable cache; config endpoint headers; `400`/`404` handling; unknown version `404`; legacy URL short cache; snippet uses the versioned URL; loader sets widget text with `textContent`, never `innerHTML` |
+| `test_stage_3.sh` | `/widget.v1.js` (the frozen first version) status, content type and immutable cache; config endpoint headers; `400`/`404` handling; unknown version `404`; legacy URL short cache; snippet uses the versioned URL; loader sets widget text with `textContent`, never `innerHTML` |
+| `test_stage_7.sh` | The customer test site answers on port 5500 and embeds the API-hosted `widget.v2.js` (a different origin from the API); the v2 bundle is `immutable`, under 10 KB, free of comments, uses `textContent` and never `innerHTML`; version 1 is still served and differs from version 2; the unversioned URL serves the current version; the CORS preflight returns `204` allowing the origin, `POST`, `Content-Type` and a 10 minute cache; the success, `400`, `404`, malformed-JSON and `429` responses all carry `Access-Control-Allow-Origin` (and `429` carries an exposed `Retry-After`); a submission sent as the page sends it is stored and appears first in the demo owner's dashboard with the second-origin page address and geo data, while a honeypot submission is not stored |
 | `test_stage_6.sh` | The dashboard rejects missing, made-up and tampered tokens; owner A's list returns exactly their submissions, newest first, with paging, widget and date filters; bad query values return `400`; owner B cannot list, fetch by id, or filter by owner A's data (`404`) and sees only their own; per-widget stats, counts over time (zero-count days included) and the geo breakdown return the expected numbers and percentages; a new public submission appears at the top of its owner's dashboard and stays hidden from the other owner |
 | `test_stage_5.sh` | Honeypot spam is dropped and not stored while a normal submission is stored; geo provider A answers, then provider B when A is down, then the submission is stored without geo when both are down; a working confirmation email is sent and a failing one still returns `201`, stores the row and raises an `ALERT`; a burst from one visitor gets `429` while another visitor and `/health` are still served and the same visitor recovers after 2 seconds; a flood of 60 different visitors on one widget gets `429` while another widget is still served |
 | `test_stage_4.sh` | Preflight `204`, valid submission `201`, missing data `400`, unknown widget `404`, oversized body `413` as JSON, malformed JSON `400` as JSON, unknown route `404` as JSON |
@@ -384,6 +421,7 @@ Raw outputs are pasted in [`EVIDENCE.md`](EVIDENCE.md). Design decisions, where 
 | **1. Widget management API** | Tenant registration and login, signed JWT authentication, full widget CRUD, tenant isolation on every query | `test_stage_1.sh` |
 | **2. Embed snippet generation** | Every widget response includes a ready-to-paste `<script>` embed snippet | `test_stage_2.sh` |
 | **3. Fast, cached widget delivery** | Versioned widget bundle (`/widget.v1.js`, cached for a year), public config endpoint (cached for 60 s), CORS, `no-store` on error responses, loader that renders widget text as plain text | `test_stage_3.sh` |
+| **7. Second-origin customer site and widget form** | A plain HTML customer page on a second origin (nginx, port 5500), widget loader version 2 that draws a form from the widget config, includes the honeypot and submits across origins, frozen older bundle versions, CORS preflight caching, a seeded demo owner | `test_stage_7.sh` |
 | **6. Owner dashboard API** | Authenticated, tenant-isolated submissions list with paging and filters, a single-submission lookup, per-widget stats, counts over time and a geo breakdown | `test_stage_6.sh` |
 | **5. Protection, enrichment and safe side effects** | Per-IP and per-widget rate limiting (`429`), honeypot spam control, geo enrichment with an A-then-B fallback chain that still stores the submission when every provider is down, background confirmation email with retries and a failure alert that never breaks the submission | `test_stage_5.sh` |
 | **4. Public submission endpoint** | Cross-origin submissions with CORS and preflight, Zod input validation, widget existence check, storage in PostgreSQL, oversized-payload rejection, JSON error responses (global error handler) | `test_stage_4.sh` |
@@ -398,7 +436,9 @@ Honest notes on the current state of the project:
 - **Body limit is 10 KB.** It is set in `server.js` (`express.json({ limit: '10kb' })`); the `test_stage_4.sh` oversized-body check sends a larger body and expects a JSON `413`.
 - **`schema.sql` is a single development script.** It drops and recreates the tables, and Docker runs it only when the database volume is new.
 - **Login tokens expire** (default 1 hour). There is no refresh token, logout or password reset.
-- **The seeded demo tenant cannot log in** (placeholder password hash); register a tenant to get a working account.
+- **The demo owner's password is public** (`DemoPass123!`, shown in this README) and exists only so the demo can be followed locally; do not use the seed file for a real deployment.
+- **The server does not enforce a widget's `required` flags.** The browser form applies them, but a direct request to the API only has to satisfy the submission's structure, size and type rules.
+- **The widget form is minimal:** one fixed-position card in the bottom-right corner with text, email and multi-line fields, and no styling options. The loader (about 7 KB uncompressed) is not minified beyond removing comments and whitespace.
 - **Rate limit buckets and queued confirmation emails live in server memory.** They reset (and queued emails are lost) when the server restarts, and they are not shared between several server instances.
 - **Geo lookups:** the default `GEO_MODE=mock` returns fixed fake locations. With `GEO_MODE=real` only public IP addresses can be located, and the free provider tiers have request quotas.
 - **The confirmation email is simulated** (a masked log line); no real mail is sent.

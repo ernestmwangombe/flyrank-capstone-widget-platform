@@ -2,7 +2,7 @@
 
 An honest record of where AI helped, where it was wrong, and what I changed. Entries for Stages 1 to 3 are kept as originally written, with corrections added where problems were found later.
 
-**How to read this log.** "The AI" means the AI assistant I worked with (Claude, in chat sessions). "I" means me. For the fixes after Stage 3, and for Stages 4, 5 and 6, the pattern was the same: the AI diagnosed problems and wrote the code from the files, logs and screenshots I gave it, and tested it in its own environment, which has no Docker and no access to the real geo services. I decided what to work on next, applied the files to my project, ran every test script on my own machine (Git Bash on Windows with Docker Desktop), pasted the real output back, and made the commits. Checks the AI ran in its own environment are labelled as such and are not my test runs.
+**How to read this log.** "The AI" means the AI assistant I worked with (Claude, in chat sessions). "I" means me. For the fixes after Stage 3, and for Stages 4, 5, 6 and 7, the pattern was the same: the AI diagnosed problems and wrote the code from the files, logs and screenshots I gave it, and tested it in its own environment, which has no Docker and no access to the real geo services. I decided what to work on next, applied the files to my project, ran every test script on my own machine (Git Bash on Windows with Docker Desktop), pasted the real output back, and made the commits. Checks the AI ran in its own environment are labelled as such and are not my test runs.
 
 ---
 
@@ -204,4 +204,57 @@ In the burst suites the split between accepted and `429` depends on machine spee
 - The composite index was added for newest-first lists and date filters, but I have not measured its effect.
 - The submissions list returns each submission's form content exactly as stored.
 - Statistics are computed live from the submissions table on every request; there is no caching.
-- The tenant-isolation proof for submissions uses `curl` calls; there is no browser page on a second origin yet.
+- The tenant-isolation proof for submissions uses `curl` calls (the browser page on a second origin came later, in Stage 7).
+
+---
+
+## Stage 7: Second-Origin Customer Site & Widget Form
+**Focus:** The widget rendering and submitting from a page on a different origin (CORS in a real browser), and versioned delivery of a changed loader.
+
+### What the AI did
+- Found, by reading my code, that the loader only drew a title and a button and never sent anything, so the brief's "renders on a second origin" and "cross-origin submissions work" requirements (and Probe 1) were not yet met.
+- Wrote `src/widget/widget.v2.js` (a form drawn from the widget config, a hidden honeypot field, a cross-origin `POST`, clear messages for success, validation errors, rate limits, a deleted widget and network or CORS failures), `src/widget/bundleLoader.js`, `customer-site/index.html`, the `customer_site` nginx service in `docker-compose.yml`, the changes to `server.js`, `schema.sql`, `.env.example`, `capstone.yaml` and the README, and `test_stage_7.sh`. Every line is commented.
+- Added a hint to the test page after my first browser load (see "What happened in the browser").
+
+### What I did
+- Gave the AI the go-ahead after it listed the main choices below.
+- Applied the files, reset the database volume with `docker compose down -v` and rebuilt with `docker compose up --build`.
+- Opened `http://localhost:5500` in Chrome, filled in and submitted the form, ran the dashboard command to see the stored submission, took the first five screenshots in `docs/evidence/`, and told the AI what I saw, including the first-load problem below.
+- Ran all seven stage scripts on my machine: every script passed (Stage 7: 55 of 55). After the AI fixed the output problem described below, I ran `test_stage_7.sh` again on its own for a clean output.
+- Took the Network-tab screenshots (6 to 8). My first attempt was empty because I opened the developer tools after submitting the form, so nothing had been recorded; I redid it with the tools open and Keep log on, then reloaded the page and submitted again.
+
+### Design decisions (proposed by the AI, approved by me)
+- **The changed loader ships as version 2, not as an edit of version 1.** Bundle URLs are cached for a year as `immutable`, so editing a published file would leave browsers with the old code. Version 1 is still served byte for byte for old embeds, new snippets use `widget.v2.js`, and the unversioned `/widget.js` always serves the current version with a 60 second cache. The server refuses to start if `WIDGET_VERSION` names a version that does not exist.
+- **The API address is not hard-coded in the loader.** It uses the address its own script was downloaded from, so the same file works on any host.
+- **All text from the widget's config is shown with `textContent`.** An owner's title, labels or field names can never inject markup into a customer's page, and field names are restricted to simple identifiers.
+- **The comments in the loader's source file are removed before it is served.** The source has a comment on every line, as asked; the public file is about 7 KB instead of about 15 KB.
+- **The customer site is a plain HTML page served by an nginx container on port 5500**, so `docker compose up` provides the second origin with nothing else to install.
+- **A seeded demo owner** (`dev@flyrank.ai`, password `DemoPass123!`, documented as development-only) so the "submission visible in the dashboard" flow can be followed from the README.
+- **CORS preflight answers can be cached by the browser for 10 minutes**, and `Retry-After` is exposed to browser code.
+
+### Checks the AI ran in its own environment (not my test runs)
+Its environment has no Docker and no real browser, so it used a local PostgreSQL, nginx, and jsdom (a simulated browser). These runs are not in `EVIDENCE.md`:
+- A simulated browser that applies the browser's CORS rules (automatic preflight, `Access-Control-Allow-Origin` check) ran the real loader against the real server: 29 checks, covering rendering, a human submission, a bot filling the honeypot, hostile owner-supplied config, and the 404, 429, 400, 500 and network-failure messages. When the server was deliberately configured to allow only another origin, the same checks failed, so the simulation does enforce CORS.
+- It broke five things on purpose (wrong CORS origin, hidden `Retry-After`, `innerHTML` in the bundle, comments not stripped, old version no longer served) and confirmed `test_stage_7.sh` fails each time.
+- It tried an old `.env` that still says `WIDGET_VERSION=1` (the test script explains the fix) and `WIDGET_VERSION=3` (the server refuses to start with a clear message).
+
+### What happened in the browser (first load)
+On my first load of `http://localhost:5500`, right after `docker compose up`, the page appeared but the widget form did not, until I opened the developer tools (F12) and loaded the page again. Later loads showed the form immediately. The container log suggests why: the customer site served the page at 20:29:25, but the API logged `Server running successfully on port 3000` at 20:29:47, because the API container downloads `nodemon` every time it starts. The widget's config request would have failed while the API was still starting, and by design the widget draws nothing and never breaks the host page when that happens. This is an explanation from the timestamps; I did not check the browser console at the time. The AI added a message to the test page that appears after 4 seconds if the widget is missing and says whether the API is reachable, and a note in the README to wait for the "Server running" line.
+
+### Where the AI was wrong
+- Some of its own test commands misbehaved: a command hung because a background web server kept its output open, one command killed its own shell by using `pkill -f` on a matching command line, and one browser-simulation test was ordered wrongly (it flooded the API before rendering the widget, so the rate-limit bucket had refilled and the submission succeeded instead of getting a 429). It fixed each and re-ran everything.
+- It did not anticipate that the widget draws nothing when the API is not ready yet; I found that in the browser.
+- Its `test_stage_7.sh` had a helper that printed the entire text it was searching, so two checks dumped the whole customer page and the whole widget bundle into the output (about 1,100 lines for a script that should print under 100). Nothing was wrong with the system and all checks passed, but the output was unusable as evidence. The AI only noticed when it read my output, then fixed the helper so it prints short values in full and only the found fragment for long texts (the script now prints about 80 lines), and I re-ran it.
+- Its instructions for the Network tab said "Preserve log"; Chrome calls that checkbox "Keep log".
+
+### Known limitations
+- The widget does not retry its config request, so a visitor who loads a page while the API is starting sees no widget until they reload.
+- The server does not enforce a widget's `required` flags; only the browser form does.
+- The loader is about 7 KB uncompressed and is not minified beyond removing comments and whitespace.
+- The browser proof is from one browser (Chrome on Windows), and the Network-tab screenshots were taken with the developer tools in device-emulation mode (mobile user agent switched on).
+- The API container still downloads `nodemon` on every start, which delays startup by roughly 20 seconds.
+
+---
+
+## Design document (written after the build)
+The brief asks for a one-page design document at the start of the project, and I did not write one then. The AI wrote `docs/DESIGN.md` at the end of Stage 7 from the finished code, schema and tests, and the document says so at the top. It records the design as it ended up (problem, the three actors and request paths, data model and indexes, API surface, layers, the submission pipeline, key decisions, one explicit non-goal, and the changes and gaps along the way). It is not a record of a plan made earlier, and I have not backdated anything.
