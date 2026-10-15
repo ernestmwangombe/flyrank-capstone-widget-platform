@@ -258,3 +258,43 @@ On my first load of `http://localhost:5500`, right after `docker compose up`, th
 
 ## Design document (written after the build)
 The brief asks for a one-page design document at the start of the project, and I did not write one then. The AI wrote `docs/DESIGN.md` at the end of Stage 7 from the finished code, schema and tests, and the document says so at the top. It records the design as it ended up (problem, the three actors and request paths, data model and indexes, API surface, layers, the submission pipeline, key decisions, one explicit non-goal, and the changes and gaps along the way). It is not a record of a plan made earlier, and I have not backdated anything.
+
+---
+
+## Stage 8: Idempotency Key on Submissions, and the License
+**Focus:** "The retried action happens once" (a shared requirement of the brief), and the missing MIT license.
+
+### What the AI did
+- Listed what was still missing against the brief and proposed the next steps; I picked the license and the idempotency key.
+- Wrote the idempotency feature with a comment on every line: `src/middleware/validateIdempotencyKey.js`, the new insert and lookup in `src/repositories/submissionRepository.js`, the retry flow in `src/services/submissionService.js`, the route changes, the schema change in `schema.sql`, the CORS changes in `server.js`, the new loader `src/widget/widget.v3.js`, the updated test page, `test_stage_8.sh`, and the updates to `test_stage_7.sh`, `capstone.yaml`, the README and `docs/DESIGN.md`.
+- Wrote the MIT `LICENSE` using the name I gave it.
+
+### What I did
+- Chose which of the remaining items to do next (the license and the idempotency key) and gave the name for the license: Ernest Mwang'ombe.
+- Applied the files, reset the database volume with `docker compose down -v`, rebuilt with `docker compose up --build`, and ran all eight stage scripts on my machine: every script passed (Stage 8: 58 of 58, Stage 7: 58 of 58).
+- Took the browser screenshots in `docs/evidence/` (the `OPTIONS` preflight allowing `Idempotency-Key` and the `POST` carrying it) and sent the app log, which shows one confirmation email for each of the submissions that were sent several times.
+
+### Design decisions (proposed by the AI, approved by me)
+- **An optional `Idempotency-Key` header, not a body field.** A request without it behaves exactly as before, so existing clients and tests are unaffected. A malformed key is a clean `400`.
+- **A retry returns the original answer.** The same key and the same form answers on the same widget return the original `201` (same `submission_id` and `created_at`) with an `Idempotent-Replayed: true` header; nothing is stored, geo-looked-up or emailed again. The same key with different answers is a `409`, because a key identifies one submission.
+- **Keys are scoped to one widget**, so different customers cannot collide with or probe each other's keys.
+- **The database enforces it.** A partial unique index on `(widget_id, idempotency_key)` plus `INSERT ... ON CONFLICT DO NOTHING` means that even simultaneous retries create exactly one row, and only the request that really inserted the row queues the confirmation email.
+- **The widget has to send the key, so it ships as a new bundle version.** Published bundles never change (they are cached for a year as `immutable`), so the new loader is `widget.v3.js` and versions 1 and 2 are still served unchanged. The loader reuses a key only when the outcome of the last attempt is in doubt (no reply, or a `5xx`) and the visitor submits the same answers again; any definitive answer, or changed answers, gets a new key.
+- **CORS:** `Idempotency-Key` is an allowed request header (otherwise the browser's preflight would block the widget) and `Idempotent-Replayed` is exposed to browser code.
+
+### Checks the AI ran in its own environment (not my test runs)
+- `test_stage_8.sh` (58 checks) and the updated `test_stage_7.sh` (58 checks) passed against a local PostgreSQL, together with Stages 1 to 6.
+- A simulated browser that applies the browser's CORS rules ran the real v3 loader (39 checks), including: the key is sent and has the right shape, a lost reply followed by a retry reuses the same key and stores one row, changed answers get a new key, a `400` or `500` behaves as designed, a browser without `crypto` uses the fallback key, and a double click sends only one request.
+- It broke six parts of the feature on purpose (key not stored, unique index missing, conflict detection removed, keys not scoped per widget, CORS not allowing the header, loader not sending the key) and confirmed `test_stage_8.sh` fails each time.
+
+### Where the AI was wrong
+- Its first browser-simulation script reused variable names from earlier tests and did not run; it fixed that and re-ran.
+- In one of its deliberate-breakage experiments, the edit left a database parameter unused, which caused a `500` instead of showing the intended failure (the same slip it had made in Stage 6). It redid that experiment correctly.
+- While updating the README it found a line from my Stage 7 README that was no longer true ("the loader does not collect or send form data"), left over from before version 2. It removed it.
+
+### Known limitations
+- Idempotency keys are stored with the submission and never expire.
+- A key is not a secret: anyone who knows a widget id and a key can get back that submission's id and creation time (not its content).
+- The widget keeps its key only in the page's memory, so reloading the page after an uncertain failure starts a new key.
+- Only the form answers are compared to decide between a replay and a `409`; the page address and other metadata are not.
+- The browser screenshots show the key being sent on a first request; the replay, conflict and race behaviour is proven by `test_stage_8.sh`, not by the browser.

@@ -4,7 +4,8 @@ Every proof below is raw terminal output from a real run: Git Bash on Windows wi
 
 **Run date:** 2026-10-02 for the seed step and Stages 1 and 2. Stage 4 was re-run after the JSON error handler was added, and Stage 3 was re-run after the loader-safety test (Suite 6) was added.
 Stage 5 was run afterwards on the same Docker stack, and Stage 6 after that, on a database reset with `docker compose down -v`. The Stage 7 browser proof below was captured in Chrome on Windows with Docker Desktop, on a database reset the same way.
-**Stages covered:** 1 to 7
+Stage 8 was run and captured afterwards in the same way (database reset with `docker compose down -v`, rebuilt with `docker compose up --build`, Chrome on Windows, Docker Desktop).
+**Stages covered:** 1 to 8
 
 The earlier version of this file was replaced. It predated the authentication fix, showed a mock token (`tenant_alpha_token_123`) and presented hand-formatted tables rather than raw output, so it no longer matched the code or the test scripts.
 
@@ -27,6 +28,8 @@ The earlier version of this file was replaced. It predated the authentication fi
 | IP-to-geo enrichment uses a provider fallback chain; all providers down still stores the submission without geo | [Stage 5](#stage-5-protection-enrichment-and-safe-side-effects): Test Suite 2 |
 | A failing confirmation email does not prevent the submission from being stored | [Stage 5](#stage-5-protection-enrichment-and-safe-side-effects): Test Suite 3 |
 | The authenticated owner views their submissions with basic analytics (counts over time, per-widget stats, geo breakdown) | [Stage 6](#stage-6-owner-dashboard-api): Test Suites 2 and 4 |
+| A retried action happens once: the same submission sent again stores one row and sends one email (shared requirement: idempotency) | [Stage 8](#stage-8-idempotency-key-on-submissions): Test Suites 1, 2, 4, 5 and 7, the app log excerpt, and browser screenshots 1 to 5 |
+| MIT license file present | `LICENSE` in the repository root (copyright holder named as the author asked) |
 | A valid submission is stored, returns 2xx and is visible via the dashboard API | `curl`: [Stage 6](#stage-6-owner-dashboard-api), Test Suite 5. Real browser on a second origin: [Stage 7](#stage-7-second-origin-customer-site-and-widget-form-real-browser), screenshots 2 to 4 |
 | The widget renders on a page served from a different origin than the API | [Stage 7](#stage-7-second-origin-customer-site-and-widget-form-real-browser): screenshots 1 and 5 |
 | Cross-origin submissions work: CORS headers correct, preflight (`OPTIONS`) handled | [Stage 7](#stage-7-second-origin-customer-site-and-widget-form-real-browser): screenshots 2 and 3 (real submission from another origin), screenshots 7 and 8 (the `OPTIONS` 204 and the `POST` 201 with their CORS headers in the browser's Network tab), and Test Suite 3 of `test_stage_7.sh` |
@@ -733,3 +736,187 @@ bash test_stage_7.sh
 | `test_stage_7.sh` | `Test Execution Summary: 55 Passed, 0 Failed` |
 
 This run used the first version of `test_stage_7.sh`, which printed the whole customer page and widget bundle inside two of its checks (a flaw in the script's output, not in the system). `test_stage_7.sh` was then fixed and run again on its own; that clean run is the output shown above.
+
+---
+
+## Stage 8: Idempotency key on submissions
+
+**Command:** `bash test_stage_8.sh` (run as part of all eight scripts back to back)
+**Result:** 58 passed, 0 failed.
+
+| Suite | What it proves |
+|---|---|
+| 1 | The same `Idempotency-Key` with the same content sent three times is stored **once**: the retries return the original `submission_id` and `created_at` with the `Idempotent-Replayed: true` header and `"idempotent_replay": true`; the dashboard shows one row; the app log shows **one** confirmation email for the three requests; field order in `data` does not matter |
+| 2 | A different key is a new submission |
+| 3 | Requests without a key are all stored, as before (backward compatible) |
+| 4 | The same key with different content is refused with `409` and nothing is stored; the original submission is unchanged |
+| 5 | Keys are scoped to one widget: the same key on another widget is an independent submission, and a retry there returns that widget's own submission |
+| 6 | Keys that are too short, too long, contain spaces, slashes or a comma, or are empty give a clean `400` that names the header, with the CORS header present, and nothing is stored |
+| 7 | 8 simultaneous requests with one new key all return `201` for the **same single** submission; exactly one of them created it and the other 7 are replays; the dashboard grew by exactly one; exactly **one** confirmation email was sent |
+| 8 | The CORS preflight asking for `idempotency-key` returns `204` and allows it; `Idempotent-Replayed` is exposed to browser code; replay and `409` responses are readable cross-origin |
+| 9 | Widget bundle version 3 is immutable, small, comment-free, never uses `innerHTML`, and sends the key; versions 1 and 2 are still served and version 2 is unchanged (it does not mention the key); the unversioned URL serves version 3; the customer page loads `widget.v3.js` |
+
+```
+==========================================================
+ Starting Stage 8: Idempotency Key on Submissions
+ API: http://localhost:3000
+==========================================================
+
+[Setup] Logging in as the demo owner and creating two fresh widgets...
+  widgets: A=2 B=3 (new snippets use version 3)
+
+[Test Suite 1] Same key, same content: stored once, answered from the original...
+  ✅ PASS: first request with a key is accepted (Value: 201)
+  ✅ PASS: first request is not marked as a replay (Value: )
+  ✅ PASS: the retry is answered with the same 201 (Value: 201)
+  ✅ PASS: the retry returns the ORIGINAL submission id (Value: 1)
+  ✅ PASS: the retry returns the original creation time (Value: 2026-10-12T20:04:22.853Z)
+  ✅ PASS: the retry is marked with the Idempotent-Replayed header (Value: true)
+  ✅ PASS: the retry body says idempotent_replay: true (Value: true)
+  ✅ PASS: a third retry (fields in another order) still returns the original (Value: 1)
+  ✅ PASS: the dashboard shows exactly one stored submission (Value: 1)
+  ✅ PASS: exactly one confirmation email was sent for the three requests (Value: 1)
+
+[Test Suite 2] A different key is a new submission...
+  ✅ PASS: same content with a new key is accepted (Value: 201)
+  ✅ PASS: a new key creates a new submission (id 2, not 1)
+  ✅ PASS: it is not marked as a replay (Value: )
+  ✅ PASS: the dashboard shows two submissions (Value: 2)
+
+[Test Suite 3] Without a key every request is stored (backward compatible)...
+  ✅ PASS: request without a key is accepted (Value: 201)
+  ✅ PASS: two identical requests without a key are stored separately (3 and 4)
+  ✅ PASS: the dashboard shows four submissions (Value: 4)
+
+[Test Suite 4] Same key, different content: 409 Conflict...
+  ✅ PASS: a reused key with different content is refused (409) (Value: 409)
+  ✅ PASS: the 409 body is a JSON error (Value: Conflict)
+  ✅ PASS: nothing new was stored (Value: 4)
+  ✅ PASS: the original submission is unchanged (Value: Retry me)
+
+[Test Suite 5] The same key on another widget is independent...
+  ✅ PASS: the same key on a different widget is accepted (Value: 201)
+  ✅ PASS: widget B got its own submission (id 5)
+  ✅ PASS: it is not marked as a replay (Value: )
+  ✅ PASS: widget B shows one submission (Value: 1)
+  ✅ PASS: a retry on widget B returns widget B's submission (Value: 5)
+
+[Test Suite 6] Malformed keys are refused (400) and nothing is stored...
+  ✅ PASS: a key shorter than 8 characters gives 400 (Value: 400)
+  ✅ PASS: the error names the Idempotency-Key header (Value: Idempotency-Key)
+  ✅ PASS: a key longer than 128 characters gives 400 (Value: 400)
+  ✅ PASS: a key with spaces gives 400 (Value: 400)
+  ✅ PASS: a key with slashes gives 400 (Value: 400)
+  ✅ PASS: a key with a comma gives 400 (Value: 400)
+  ✅ PASS: an empty key gives 400 (Value: 400)
+  ✅ PASS: the 400 for a bad key carries the CORS header (Value: *)
+  ✅ PASS: none of the malformed requests was stored (Value: 4)
+
+[Test Suite 7] 8 simultaneous requests with the same key...
+  ✅ PASS: all 8 simultaneous requests were answered with 201 (Value: 8)
+  ✅ PASS: they all name the same single submission (Value: 1)
+  ✅ PASS: exactly one of the 8 created the submission, the other 7 are replays (Value: 1)
+  ✅ PASS: the dashboard grew by exactly one (5 submissions) (Value: 5)
+  ✅ PASS: exactly one confirmation email was sent for the 8 requests (Value: 1)
+
+[Test Suite 8] CORS allows the Idempotency-Key header and exposes the replay header...
+  ✅ PASS: preflight asking for idempotency-key returns 204 (Value: 204)
+  ✅ PASS: preflight allows the Idempotency-Key header (Value: Content-Type,Authorization,Idempotency-Key)
+  ✅ PASS: preflight still allows Content-Type (Value: Content-Type,Authorization,Idempotency-Key)
+  ✅ PASS: a replay response allows the customer origin (Value: *)
+  ✅ PASS: Idempotent-Replayed is exposed to browser code (Value: Retry-After,Idempotent-Replayed)
+  ✅ PASS: the 409 response allows the customer origin (Value: *)
+
+[Test Suite 9] Widget bundle version 3...
+  ✅ PASS: GET /widget.v3.js returns 200 (Value: 200)
+  ✅ PASS: version 3 has the long-term cache header (Value: public, max-age=31536000, immutable)
+  ✅ PASS: version 3 sends the Idempotency-Key header (found: 'Idempotency-Key')
+  ✅ PASS: version 3 makes keys with crypto.getRandomValues (found: 'getRandomValues')
+  ✅ PASS: version 3 does not use innerHTML
+  ✅ PASS: no comment lines shipped in version 3 (Value: 0)
+  ✅ PASS: version 3 is small (7921 bytes, limit 10240)
+  ✅ PASS: version 2 is still served (Value: 200)
+  ✅ PASS: version 2 is unchanged (no Idempotency-Key in it)
+  ✅ PASS: version 1 is still served (Value: 200)
+  ✅ PASS: the unversioned /widget.js serves the current version (same bytes as v3)
+  ✅ PASS: the customer test page loads widget.v3.js (found: 'widget.v3.js')
+
+==========================================================
+ Test Execution Summary: 58 Passed, 0 Failed
+==========================================================
+```
+
+### One email per submission, shown in the app log
+
+Stage 8's tests send 14 requests that include an email address (3 for key one, 1 for key two, 2 on the second widget, and the 8 simultaneous ones). The app log shows exactly **four** confirmation emails for them, one each for submissions 1, 2, 5 and 6 (the addresses are masked in the log):
+
+```
+flyrank_app            | {"event":"email_sent","to":"r***@example.com","subject":"We received your submission","submission_id":1}
+flyrank_app            | {"event":"email_sent","to":"r***@example.com","subject":"We received your submission","submission_id":2}
+flyrank_app            | {"event":"email_sent","to":"r***@example.com","subject":"We received your submission","submission_id":5}
+flyrank_app            | {"event":"email_sent","to":"r***@example.com","subject":"We received your submission","submission_id":6}
+```
+
+### In a real browser: the widget sends the key and the preflight allows it
+
+On the customer page (`http://localhost:5500`, which now loads `widget.v3.js`) the form was submitted with Chrome's Network tab open and Keep log on. The page reported `HTTP 201 (stored as submission #102)`.
+
+| Screenshot | What it shows |
+|---|---|
+| 1 | The customer page with the widget drawn and the embed snippet `<script src="http://localhost:3000/widget.v3.js?id=1" defer></script>`; the Network tab is open and recording before the submit |
+| 2 | The `OPTIONS` preflight to `http://localhost:3000/api/embed/submit`: `204 No Content`. Request headers: `Access-Control-Request-Method: POST`, `Access-Control-Request-Headers: content-type,idempotency-key`, `Origin: http://localhost:5500`. Response headers: `Access-Control-Allow-Origin: *`, `Access-Control-Allow-Methods: GET,POST,PUT,DELETE,OPTIONS`, `Access-Control-Allow-Headers: Content-Type,Authorization,Idempotency-Key`, `Access-Control-Expose-Headers: Retry-After,Idempotent-Replayed`, `Access-Control-Max-Age: 600` |
+| 3 | The same preflight with the headers shown raw |
+| 4 | The actual `POST`: `201 Created`. Request headers include `Idempotency-Key: 1492e35b3216627e3b5ae794fadcedea` (32 hex characters generated by the widget), `Content-Type: application/json` and `Origin: http://localhost:5500`. Response headers include `Access-Control-Allow-Origin: *` and `Access-Control-Expose-Headers: Retry-After,Idempotent-Replayed` |
+| 5 | The same `POST` with the response headers shown raw |
+
+![Screenshot 1: the page with widget version 3 and DevTools open](docs/evidence/stage8-1-page-with-widget-v3-devtools-open.jpg)
+
+![Screenshot 2: the preflight allows Idempotency-Key](docs/evidence/stage8-2-preflight-allows-idempotency-key.jpg)
+
+![Screenshot 3: the preflight, raw headers](docs/evidence/stage8-3-preflight-raw-headers.jpg)
+
+![Screenshot 4: the POST carries the Idempotency-Key header](docs/evidence/stage8-4-post-carries-idempotency-key.jpg)
+
+![Screenshot 5: the POST, raw response headers](docs/evidence/stage8-5-post-raw-headers.jpg)
+
+The confirmation email for this browser submission appears in the same app log (the address is masked):
+
+```
+flyrank_app            | {"event":"email_sent","to":"t***@email.com","subject":"We received your submission","submission_id":102}
+```
+
+Notes:
+- The screenshots were taken with Chrome's developer tools in device-emulation mode (mobile `User-Agent`), like the Stage 7 ones; the requests are real requests to the running API.
+- The browser submission is a first request, so it shows the key being sent but not a replay. The replay, the `409`, the scoping and the simultaneous-request behaviour are shown by `test_stage_8.sh` above.
+
+---
+
+## Full regression run: Stages 1 to 8 together
+
+All eight stage scripts were run back to back on the Docker stack (database reset first):
+
+```
+bash test_stage_1.sh
+bash test_stage_2.sh
+bash test_stage_3.sh
+bash test_stage_4.sh
+bash test_stage_5.sh
+bash test_stage_6.sh
+bash test_stage_7.sh
+bash test_stage_8.sh
+```
+
+**Result:** every script passed. These are the summary lines they printed:
+
+| Script | Summary line printed |
+|---|---|
+| `test_stage_1.sh` | `ALL STAGE 1 TESTS PASSED SUCCESSFULLY!` |
+| `test_stage_2.sh` | `STAGE 2 VERIFICATION COMPLETE: ALL CHECKS PASSED!` |
+| `test_stage_3.sh` | `Test Execution Summary: 16 Passed, 0 Failed` |
+| `test_stage_4.sh` | `STAGE 4 VERIFICATION COMPLETE: ALL CHECKS PASSED!` |
+| `test_stage_5.sh` | `Test Execution Summary: 34 Passed, 0 Failed` |
+| `test_stage_6.sh` | `Test Execution Summary: 75 Passed, 0 Failed` |
+| `test_stage_7.sh` | `Test Execution Summary: 58 Passed, 0 Failed` |
+| `test_stage_8.sh` | `Test Execution Summary: 58 Passed, 0 Failed` |
+
+`test_stage_7.sh` now has 58 checks (it was 55): it was updated so that version 3 is the current bundle and it also checks that version 2 is still served.
