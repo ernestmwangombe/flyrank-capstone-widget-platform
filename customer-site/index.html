@@ -63,7 +63,7 @@
     // Validate it so nothing but digits can ever end up in the script address
     var widgetId = /^\d+$/.test(requested || '') ? requested : '1';
     // The exact line a customer would paste into their site
-    var snippetText = '<script src="' + API_ORIGIN + '/widget.v2.js?id=' + widgetId + '" defer></' + 'script>';
+    var snippetText = '<script src="' + API_ORIGIN + '/widget.v3.js?id=' + widgetId + '" defer></' + 'script>';
     // Show the snippet as plain text
     document.getElementById('snippet').textContent = snippetText;
     // Show this page's origin
@@ -100,7 +100,7 @@
     // Install the widget exactly like a customer would: add the script tag (the widget draws itself in the corner)
     var tag = document.createElement('script');
     // The script address with the widget id
-    tag.src = API_ORIGIN + '/widget.v2.js?id=' + widgetId;
+    tag.src = API_ORIGIN + '/widget.v3.js?id=' + widgetId;
     // Do not block page parsing, the same as the snippet above
     tag.defer = true;
     // Add it to the page

@@ -62,7 +62,8 @@ const DUMMY_HASH = bcrypt.hashSync('not-a-real-password', BCRYPT_ROUNDS);
 
 // FIX (Stage 3): current widget bundle version; change WIDGET_VERSION in .env (or edit the fallback) on each release so the bundle URL changes
 // FIX (Stage 7): the current version is now '2' (the loader gained the form and the submit logic). Version 1 is still served so old embeds keep working.
-const WIDGET_VERSION = /^\d+$/.test(process.env.WIDGET_VERSION || '') ? process.env.WIDGET_VERSION : '2';
+// FIX (Stage 8): the current version is now '3' (submissions carry an Idempotency-Key). Versions 1 and 2 are still served and never change.
+const WIDGET_VERSION = /^\d+$/.test(process.env.WIDGET_VERSION || '') ? process.env.WIDGET_VERSION : '3';
 
 // Initialize Express application instance
 const app = express();
@@ -78,9 +79,11 @@ app.use(cors({
   origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   // FIX: x-tenant-id removed from the allowed headers because tenant identity now comes only from the signed token
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  // FIX (Stage 8): Idempotency-Key is allowed too, so the widget's retry-safe submissions pass the browser's preflight check
+  allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key'],
   // FIX (Stage 5): let browser code on other origins read the Retry-After header that comes with a 429 response
-  exposedHeaders: ['Retry-After'],
+  // FIX (Stage 8): Idempotent-Replayed is exposed as well, so browser code can see that a reply was a replay of an earlier submission
+  exposedHeaders: ['Retry-After', 'Idempotent-Replayed'],
   // FIX (Stage 7): browsers may remember the answer to the CORS preflight (OPTIONS) request for 10 minutes, so each visitor's second submission skips it
   maxAge: 600
 }));
@@ -661,11 +664,15 @@ const buildWidgetScript = (baseUrl) => {
 // A new release adds a new entry here (and a new source file) instead of editing an old one.
 //   version 1 = the original display-only card (kept exactly as it was; it needs the public base URL inserted)
 //   version 2 = the form + honeypot + cross-origin submit loader, read once from src/widget/widget.v2.js (it finds the API address from its own script URL)
+//   version 3 = version 2 plus retry-safe submissions (Idempotency-Key header), read once from src/widget/widget.v3.js
 const WIDGET_V2_SOURCE = loadBundleSource('widget.v2.js');
+// FIX (Stage 8): version 3 = version 2 plus the Idempotency-Key header on every submission (read once from src/widget/widget.v3.js)
+const WIDGET_V3_SOURCE = loadBundleSource('widget.v3.js');
 // Map from version number (as text) to a function that returns that version's JavaScript for a given request
 const WIDGET_BUNDLES = {
   '1': (req) => buildWidgetScript(getBaseUrl(req)),
-  '2': () => WIDGET_V2_SOURCE
+  '2': () => WIDGET_V2_SOURCE,
+  '3': () => WIDGET_V3_SOURCE
 };
 
 // FIX (Stage 7): fail fast if .env asks for a version that has no bundle, instead of handing out embed snippets that would all return 404

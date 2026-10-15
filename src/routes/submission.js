@@ -10,6 +10,8 @@ import express from 'express';
 import { validateSubmission } from '../middleware/validateSubmission.js';
 // Import the spam control (honeypot field)
 import { honeypotGuard } from '../middleware/honeypot.js';
+// Import the check for the optional Idempotency-Key header (Stage 8)
+import { validateIdempotencyKey } from '../middleware/validateIdempotencyKey.js';
 // Import the per-widget rate limiter
 import { widgetRateLimiter } from '../middleware/rateLimiter.js';
 // Import the business-logic layer
@@ -26,7 +28,7 @@ const router = express.Router();
  * Public Form Submission Endpoint
  * Route: POST /api/embed/submit
  */
-router.post('/submit', validateSubmission, honeypotGuard, widgetRateLimiter, async (req, res) => {
+router.post('/submit', validateSubmission, validateIdempotencyKey, honeypotGuard, widgetRateLimiter, async (req, res) => {
   try {
     // Take the cleaned fields produced by the validator
     const { widget_id, payload, data, metadata } = req.validatedData;
@@ -39,7 +41,9 @@ router.post('/submit', validateSubmission, honeypotGuard, widgetRateLimiter, asy
       content,
       metadata,
       clientIp: getClientIp(req),
-      controls: readTestControls(req)
+      controls: readTestControls(req),
+      // The validated Idempotency-Key header, or null when the client did not send one
+      idempotencyKey: req.idempotencyKey
     });
 
     // Unknown widget: 404
@@ -49,6 +53,21 @@ router.post('/submit', validateSubmission, honeypotGuard, widgetRateLimiter, asy
         error: 'Not Found',
         message: `Widget with ID ${widget_id} does not exist.`
       });
+    }
+
+    // Same key, different content: refuse instead of silently returning a different submission
+    if (result.status === 'idempotency_conflict') {
+      // Respond with a JSON 409 Conflict
+      return res.status(409).json({
+        error: 'Conflict',
+        message: 'This Idempotency-Key was already used with different content.'
+      });
+    }
+
+    // A retry of a request that was already stored: tell the client so with a header (the reply itself looks like the original success)
+    if (result.status === 'replayed') {
+      // Header readable by browser code too (it is listed in the CORS exposed headers)
+      res.set('Idempotent-Replayed', 'true');
     }
 
     // Success: 201 with the stored submission and a short note on how enrichment went
@@ -62,7 +81,9 @@ router.post('/submit', validateSubmission, honeypotGuard, widgetRateLimiter, asy
         status: result.enrichment.status,
         // Which provider answered (null when none did)
         provider: result.enrichment.geo ? result.enrichment.geo.provider : null
-      }
+      },
+      // Only present on a replay, so existing clients see exactly the same body as before
+      ...(result.status === 'replayed' ? { idempotent_replay: true } : {})
     });
   } catch (error) {
     // Full detail stays in the server log only

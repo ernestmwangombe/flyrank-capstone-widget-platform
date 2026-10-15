@@ -126,17 +126,17 @@ echo "  demo owner login OK"
 # Create a widget as the demo owner and read its embed snippet, to learn which bundle version new embeds use
 SNIPPET=$(curl -s -X POST "$BASE_URL/api/widgets" -H "Authorization: Bearer $DEMO_TOKEN" -H 'Content-Type: application/json' \
   -d '{"name":"Stage 7 check widget","type":"signup_form","config":{"title":"Stage 7"}}' | jq -r '.embed_snippet')
-# New snippets must point at version 2
-if ! echo "$SNIPPET" | grep -q 'widget\.v2\.js'; then
+# New snippets must point at version 3
+if ! echo "$SNIPPET" | grep -q 'widget\.v3\.js'; then
   # Explain what is wrong
-  echo "  ❌ FAIL: new embed snippets do not use widget.v2.js (snippet: $SNIPPET)."
+  echo "  ❌ FAIL: new embed snippets do not use widget.v3.js (snippet: $SNIPPET)."
   # Tell the user the fix
-  echo "     Your .env probably still says WIDGET_VERSION=1. Change it to WIDGET_VERSION=2 (or delete the line) and restart."
+  echo "     Your .env probably still says WIDGET_VERSION=1. Change it to WIDGET_VERSION=3 (or delete the line) and restart."
   # Stop the whole script
   exit 1
 fi
 # Report the snippet
-echo "  new embed snippets use version 2: $SNIPPET"
+echo "  new embed snippets use version 3: $SNIPPET"
 
 # ------------------------------------------------------------------------------
 # TEST SUITE 1: the customer site is a different origin and embeds the widget
@@ -151,9 +151,9 @@ expect_equal "customer page returns 200" "200" "$PAGE_STATUS"
 # It is an HTML page
 expect_contains "customer page is HTML" "text/html" "$(header_value "$TMP_DIR/headers" content-type)"
 # It loads the widget from the API's address, not from its own
-expect_contains "customer page embeds the API-hosted widget.v2.js bundle" "http://localhost:3000" "$(cat "$TMP_DIR/body")"
+expect_contains "customer page embeds the API-hosted widget.v3.js bundle" "http://localhost:3000" "$(cat "$TMP_DIR/body")"
 # The bundle name appears too
-expect_contains "customer page uses widget.v2.js" "widget.v2.js" "$(cat "$TMP_DIR/body")"
+expect_contains "customer page uses widget.v3.js" "widget.v3.js" "$(cat "$TMP_DIR/body")"
 # The two origins (scheme + host + port) are different
 if [ "$SITE_URL" != "$BASE_URL" ]; then pass "page origin ($SITE_URL) differs from API origin ($BASE_URL)"; else fail "page and API share an origin"; fi
 # The API itself does not serve that page: its root is a JSON 404
@@ -164,15 +164,15 @@ expect_equal "the API does not serve the page itself (GET / is 404)" "404" "$ROO
 expect_contains "API 404 is JSON" "application/json" "$(header_value "$TMP_DIR/headers" content-type)"
 
 # ------------------------------------------------------------------------------
-# TEST SUITE 2: the widget bundle (version 2) and old versions
+# TEST SUITE 2: the widget bundle (version 3) and old versions
 # ------------------------------------------------------------------------------
 echo ""
 echo "[Test Suite 2] Widget bundle: versioned, cacheable, small and safe..."
 
-# Download version 2 with an Origin header, as a browser on the customer site would
-V2_STATUS=$(send "$BASE_URL/widget.v2.js?id=1" -H "Origin: $SITE_URL")
+# Download version 3 with an Origin header, as a browser on the customer site would
+V3_STATUS=$(send "$BASE_URL/widget.v3.js?id=1" -H "Origin: $SITE_URL")
 # Served
-expect_equal "GET /widget.v2.js returns 200" "200" "$V2_STATUS"
+expect_equal "GET /widget.v3.js returns 200" "200" "$V3_STATUS"
 # JavaScript content type
 expect_contains "content type is JavaScript" "application/javascript" "$(header_value "$TMP_DIR/headers" content-type)"
 # Cached for a year, immutable
@@ -180,42 +180,50 @@ expect_equal "long-term cache header" "public, max-age=31536000, immutable" "$(h
 # Readable from any origin
 expect_equal "Access-Control-Allow-Origin on the bundle" "*" "$(header_value "$TMP_DIR/headers" access-control-allow-origin)"
 # Keep a copy of the body for the content checks
-cp "$TMP_DIR/body" "$TMP_DIR/v2.js"
+cp "$TMP_DIR/body" "$TMP_DIR/v3.js"
 # Size in bytes (small payloads matter for widget load time)
-V2_SIZE=$(wc -c < "$TMP_DIR/v2.js" | tr -d ' ')
+V3_SIZE=$(wc -c < "$TMP_DIR/v3.js" | tr -d ' ')
 # Under 10 KB uncompressed
-if [ "$V2_SIZE" -le 10240 ]; then pass "bundle is small ($V2_SIZE bytes, limit 10240)"; else fail "bundle is too large ($V2_SIZE bytes, limit 10240)"; fi
+if [ "$V3_SIZE" -le 10240 ]; then pass "bundle is small ($V3_SIZE bytes, limit 10240)"; else fail "bundle is too large ($V3_SIZE bytes, limit 10240)"; fi
 # No comment-only lines are shipped to browsers
-expect_equal "no comment lines shipped in the public bundle" "0" "$(grep -c '^//' "$TMP_DIR/v2.js")"
+expect_equal "no comment lines shipped in the public bundle" "0" "$(grep -c '^//' "$TMP_DIR/v3.js")"
 # No blank lines either
-expect_equal "no blank lines shipped in the public bundle" "0" "$(grep -c '^$' "$TMP_DIR/v2.js")"
+expect_equal "no blank lines shipped in the public bundle" "0" "$(grep -c '^$' "$TMP_DIR/v3.js")"
 # It submits to the public endpoint
-expect_contains "bundle posts to the submission endpoint" "/api/embed/submit" "$(cat "$TMP_DIR/v2.js")"
+expect_contains "bundle posts to the submission endpoint" "/api/embed/submit" "$(cat "$TMP_DIR/v3.js")"
 # It includes the honeypot field name
-expect_contains "bundle includes the honeypot field" "'website'" "$(cat "$TMP_DIR/v2.js")"
+expect_contains "bundle includes the honeypot field" "'website'" "$(cat "$TMP_DIR/v3.js")"
 # It reports results to the host page
-expect_contains "bundle announces results to the host page" "flyrank:submit-result" "$(cat "$TMP_DIR/v2.js")"
+expect_contains "bundle announces results to the host page" "flyrank:submit-result" "$(cat "$TMP_DIR/v3.js")"
 # It shows owner-supplied text as plain text
-expect_contains "bundle sets text with textContent" "textContent" "$(cat "$TMP_DIR/v2.js")"
+expect_contains "bundle sets text with textContent" "textContent" "$(cat "$TMP_DIR/v3.js")"
 # It never assigns HTML
-if grep -q 'innerHTML' "$TMP_DIR/v2.js"; then fail "bundle uses innerHTML"; else pass "bundle does not use innerHTML"; fi
+if grep -q 'innerHTML' "$TMP_DIR/v3.js"; then fail "bundle uses innerHTML"; else pass "bundle does not use innerHTML"; fi
 
-# Version 1 must still be served (old embeds keep working) and must be a different file from version 2
+# Older versions must still be served (old embeds keep working) and must be different files from version 3
 V1_STATUS=$(send "$BASE_URL/widget.v1.js?id=1")
 # Still served
 expect_equal "old version 1 is still served" "200" "$V1_STATUS"
 # Still cacheable forever
 expect_equal "version 1 keeps its immutable cache header" "public, max-age=31536000, immutable" "$(header_value "$TMP_DIR/headers" cache-control)"
 # The two versions differ
-if cmp -s "$TMP_DIR/body" "$TMP_DIR/v2.js"; then fail "version 1 and version 2 are identical"; else pass "version 1 and version 2 are different files"; fi
+if cmp -s "$TMP_DIR/body" "$TMP_DIR/v3.js"; then fail "version 1 and version 3 are identical"; else pass "version 1 and version 3 are different files"; fi
+# Version 2 (the previous current version) must also still be served, and it must differ from version 3
+V2_STATUS=$(send "$BASE_URL/widget.v2.js?id=1")
+# Still served
+expect_equal "previous version 2 is still served" "200" "$V2_STATUS"
+# Still cacheable forever
+expect_equal "version 2 keeps its immutable cache header" "public, max-age=31536000, immutable" "$(header_value "$TMP_DIR/headers" cache-control)"
+# Different from the current version
+if cmp -s "$TMP_DIR/body" "$TMP_DIR/v3.js"; then fail "version 2 and version 3 are identical"; else pass "version 2 and version 3 are different files"; fi
 # The unversioned URL tracks the current version, with a short cache
 LEGACY_STATUS=$(send "$BASE_URL/widget.js?id=1")
 # Served
 expect_equal "unversioned /widget.js returns 200" "200" "$LEGACY_STATUS"
 # Short cache
 expect_equal "unversioned /widget.js has a short cache" "public, max-age=60" "$(header_value "$TMP_DIR/headers" cache-control)"
-# It is the current version (same bytes as version 2)
-if cmp -s "$TMP_DIR/body" "$TMP_DIR/v2.js"; then pass "unversioned /widget.js serves the current version (same bytes as v2)"; else fail "unversioned /widget.js does not match version 2"; fi
+# It is the current version (same bytes as version 3)
+if cmp -s "$TMP_DIR/body" "$TMP_DIR/v3.js"; then pass "unversioned /widget.js serves the current version (same bytes as v3)"; else fail "unversioned /widget.js does not match version 3"; fi
 
 # ------------------------------------------------------------------------------
 # TEST SUITE 3: CORS, exactly as a browser on the customer site needs it

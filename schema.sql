@@ -31,6 +31,7 @@ CREATE TABLE submissions (
   widget_id INT NOT NULL REFERENCES widgets(id) ON DELETE CASCADE, -- Foreign key binding submission directly to parent widget
   payload JSONB NOT NULL,                                      -- Native JSONB document capturing arbitrary form field key-value pairs
   metadata JSONB DEFAULT '{}'::jsonb,                          -- JSONB document storing client browser metadata (e.g., IP, page_url)
+  idempotency_key VARCHAR(128),                                -- Optional client-chosen retry key (Stage 8); the same key on the same widget is stored only once
   geo JSONB,                                                   -- Location looked up from the visitor's IP (country, city, provider); NULL when no provider could answer
   created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP -- Audit timestamp recording exact submission receipt in UTC
 );
@@ -67,6 +68,10 @@ CREATE INDEX idx_widgets_tenant_id ON widgets(tenant_id);
 -- FIX (Stage 6): composite index on (widget_id, created_at DESC). It serves "all submissions of a widget" (widget_id alone, as before)
 -- AND the dashboard's newest-first lists and time-window filters, so the old single-column index on widget_id is no longer needed.
 CREATE INDEX idx_submissions_widget_created ON submissions(widget_id, created_at DESC);
+
+-- FIX (Stage 8): at most ONE submission per (widget, idempotency key). The database enforces it, so even simultaneous retries cannot create duplicates.
+-- It is a partial index: submissions without a key (the normal case before Stage 8) are not affected.
+CREATE UNIQUE INDEX idx_submissions_widget_idempotency ON submissions(widget_id, idempotency_key) WHERE idempotency_key IS NOT NULL;
 
 -- Create GIN (Generalized Inverted Index) on submissions.payload to enable fast JSON key-value searches
 CREATE INDEX idx_submissions_payload_gin ON submissions USING GIN (payload);
